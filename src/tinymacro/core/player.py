@@ -22,6 +22,7 @@ class Player:
     backend: InputBackend
     clock_ns: Callable[[], int] = time.monotonic_ns
     sleeper: Callable[[float], None] = time.sleep
+    on_loop_complete: Callable[[int, int, float, Macro], None] | None = None
 
     state: PlaybackState = field(default_factory=PlaybackState)
     _stop_event: threading.Event = field(default_factory=threading.Event)
@@ -72,6 +73,8 @@ class Player:
                 loops_done += 1
                 next_loop_ns = loop_start_ns + int(duration_ns / speed)
                 self._sleep_until(next_loop_ns)
+                if not self._stop_event.is_set() and self.on_loop_complete:
+                    self.on_loop_complete(loops_done, loop_count, speed, macro)
         finally:
             self.state.playing = False
 

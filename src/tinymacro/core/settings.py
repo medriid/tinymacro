@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from .hotkeys import HotkeySet
+from tinymacro.notifications.discord import WebhookSettings
 
 ThemeName = Literal["system", "light", "dark"]
 
@@ -24,6 +25,7 @@ class Settings:
     loop_count: int = 1
     speed: float = 1.0
     hotkeys: HotkeySet = field(default_factory=HotkeySet)
+    webhook: WebhookSettings = field(default_factory=WebhookSettings)
 
     def validate(self) -> None:
         if self.theme not in {"system", "light", "dark"}:
@@ -33,6 +35,7 @@ class Settings:
         if self.speed <= 0:
             raise ValueError("Speed must be positive")
         self.hotkeys.validate()
+        self.webhook.validate()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -44,6 +47,7 @@ class Settings:
             "loop_count": self.loop_count,
             "speed": self.speed,
             "hotkeys": self.hotkeys.to_dict(),
+            "webhook": self.webhook.to_dict(),
         }
 
     @classmethod
@@ -56,6 +60,7 @@ class Settings:
             loop_count=int(data.get("loop_count", 1)),
             speed=float(data.get("speed", 1.0)),
             hotkeys=HotkeySet.from_dict(data.get("hotkeys", {}) if isinstance(data.get("hotkeys"), dict) else {}),
+            webhook=WebhookSettings.from_dict(data.get("webhook", {}) if isinstance(data.get("webhook"), dict) else {}),
         )
         settings.validate()
         return settings

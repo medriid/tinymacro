@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 import subprocess
+import threading
 
-from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtCore import QByteArray, QBuffer, QIODevice, QObject, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QApplication,
@@ -29,6 +31,12 @@ from tinymacro.export import export_runner
 from tinymacro.gui.editor import EditorDialog
 from tinymacro.gui.preferences import PreferencesDialog
 from tinymacro.gui.theme import apply_theme
+from tinymacro.notifications.discord import DiscordWebhookClient
+
+
+class PlaybackSignalBridge(QObject):
+    loop_completed = pyqtSignal(int, int, float, object)
+    webhook_error = pyqtSignal(str)
 
 
 class MainWindow(QMainWindow):
@@ -45,6 +53,11 @@ class MainWindow(QMainWindow):
         self.persist_settings = persist_settings
         self.recorder = Recorder(backend, settings.hotkeys, skip_final_click=settings.skip_final_click)
         self.player = Player(backend)
+        self.notification_bridge = PlaybackSignalBridge(self)
+        self.notification_bridge.loop_completed.connect(self._handle_loop_completed)
+        self.notification_bridge.webhook_error.connect(lambda message: self.statusBar().showMessage(message, 6000))
+        self.player.on_loop_complete = self._emit_loop_completed
+        self.webhook_client = DiscordWebhookClient()
         self.macro = Macro()
         self.path: Path | None = None
         self.dirty = False
@@ -187,6 +200,7 @@ class MainWindow(QMainWindow):
             return
         self.settings.loop_count = self.loop_spin.value()
         self.settings.speed = self.speed_spin.value()
+        self.player.on_loop_complete = self._emit_loop_completed
         self.player.start(self.macro, loop_count=self.settings.loop_count, speed=self.settings.speed)
         self._update_state()
 
@@ -285,7 +299,40 @@ class MainWindow(QMainWindow):
         self.backend = create_backend(self.settings.backend)
         self.recorder.backend = self.backend
         self.player.backend = self.backend
+        self.player.on_loop_complete = self._emit_loop_completed
         self._start_hotkeys()
+
+    def _emit_loop_completed(self, loop_index: int, total_loops: int, speed: float, macro: Macro) -> None:
+        self.notification_bridge.loop_completed.emit(loop_index, total_loops, speed, macro)
+
+    def _handle_loop_completed(self, loop_index: int, total_loops: int, speed: float, macro: Macro) -> None:
+        if not self.settings.webhook.should_send(loop_index):
+            return
+        screenshot = self._capture_screenshot_png() if self.settings.webhook.include_screenshot else None
+        settings = copy.deepcopy(self.settings.webhook)
+
+        def send() -> None:
+            try:
+                self.webhook_client.send_loop_update(settings, loop_index, total_loops, speed, macro, screenshot)
+            except Exception as exc:
+                self.notification_bridge.webhook_error.emit(str(exc))
+
+        threading.Thread(target=send, name="tiny-macro-discord-webhook", daemon=True).start()
+
+    def _capture_screenshot_png(self) -> bytes | None:
+        app = QApplication.instance()
+        if not app:
+            return None
+        screen = app.primaryScreen()
+        if not screen:
+            return None
+        pixmap = screen.grabWindow(0)
+        data = QByteArray()
+        buffer = QBuffer(data)
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        pixmap.save(buffer, "PNG")
+        buffer.close()
+        return bytes(data)
 
     def toggle_always_on_top(self) -> None:
         self.settings.always_on_top = self.top_action.isChecked()
@@ -321,7 +368,7 @@ class MainWindow(QMainWindow):
             title += " *"
         self.setWindowTitle(title)
         if self.player.state.playing:
-            loops = "∞" if self.loop_spin.value() == 0 else str(self.loop_spin.value())
+            loops = "inf" if self.loop_spin.value() == 0 else str(self.loop_spin.value())
             self.statusBar().showMessage(
                 f"Playing loop {self.player.state.loop_index}/{loops} | "
                 f"{self.player.state.remaining_ns / 1_000_000_000:.2f}s left"

@@ -44,3 +44,16 @@ def test_player_speed_scales_duration():
     player.start(macro, loop_count=1, speed=2.0, blocking=True)
 
     assert clock.now == 50_000_000
+
+
+def test_player_calls_loop_complete_after_each_loop():
+    backend = FakeBackend()
+    clock = FakeClock()
+    calls = []
+    macro = Macro(events=[MacroEvent(10_000_000, "key", "press", key="a")])
+    player = Player(backend, clock_ns=clock, sleeper=clock.sleep)
+    player.on_loop_complete = lambda loop, total, speed, played: calls.append((loop, total, speed, played.duration_ns))
+
+    player.start(macro, loop_count=2, speed=1.0, blocking=True)
+
+    assert calls == [(1, 2, 1.0, 10_000_000), (2, 2, 1.0, 10_000_000)]
