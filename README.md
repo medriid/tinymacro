@@ -36,8 +36,20 @@ the project folder or `tiny-macro-arch-wayland-build-kit.zip`, then have them
 run:
 
 ```bash
-unzip tiny-macro-arch-wayland-build-kit.zip
-cd tiny-macro-arch-wayland-build-kit
+mkdir -p ~/tiny-macro-build-kit
+unzip ~/Downloads/tiny-macro-arch-wayland-build-kit.zip -d ~/tiny-macro-build-kit
+cd ~/tiny-macro-build-kit
+bash scripts/build_arch_wayland.sh
+```
+
+Do not run the script from inside an archive preview window. Fully extract the
+zip into a normal writable folder first. If they see `Permission denied` for a
+path like `src/tinymacro/__pycache__`, run:
+
+```bash
+cd ~/tiny-macro-build-kit
+sudo chown -R "$USER:$USER" .
+chmod -R u+rwX .
 bash scripts/build_arch_wayland.sh
 ```
 
@@ -46,6 +58,9 @@ The script checks every major prerequisite before building:
 - Confirms it is running on Linux.
 - Checks that the distro is Arch or Arch-like.
 - Checks `pacman`, `sudo`, Python, pip, and venv support.
+- Checks that the extracted project folder is writable.
+- Removes stale Python `__pycache__` folders.
+- Redirects Python cache files into `.pycache-build`.
 - Installs missing pacman packages with `sudo pacman -S --needed`.
 - Creates a clean `.venv-build`.
 - Installs this project plus PyInstaller.

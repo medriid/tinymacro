@@ -37,6 +37,19 @@ run_step() {
   "$@"
 }
 
+check_writable_path() {
+  local path="$1"
+  if [[ ! -w "$path" ]]; then
+    fail "$path is not writable by $USER.
+
+Fix it with:
+  sudo chown -R \"$USER:$USER\" \"$ROOT\"
+  chmod -R u+rwX \"$ROOT\"
+
+Also make sure you fully extracted the zip into a real folder, not just opened it in an archive preview."
+  fi
+}
+
 say "Tiny Macro Arch/Wayland build preflight"
 printf 'Project: %s\n' "$ROOT"
 
@@ -59,6 +72,33 @@ need_command sudo "Install sudo or run package installation manually as root."
 if [[ "${EUID}" -eq 0 ]]; then
   fail "Do not run this whole script as root. Run as a normal user with sudo access."
 fi
+
+case "$ROOT" in
+  /tmp/*|/var/tmp/*)
+    printf 'WARNING: The project is currently under a temporary directory: %s\n' "$ROOT" >&2
+    printf 'If this came from opening the zip in a file manager, extract it to ~/tiny-macro-build-kit first.\n' >&2
+    ;;
+esac
+
+check_writable_path "$ROOT"
+check_writable_path "$ROOT/src"
+check_writable_path "$ROOT/src/tinymacro"
+
+say "Cleaning stale Python cache folders"
+find "$ROOT/src" "$ROOT/tests" -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || {
+  fail "Could not remove stale __pycache__ folders.
+
+Fix ownership and permissions, then rerun:
+  sudo chown -R \"$USER:$USER\" \"$ROOT\"
+  chmod -R u+rwX \"$ROOT\""
+}
+
+export PYTHONDONTWRITEBYTECODE=1
+export PYTHONPYCACHEPREFIX="$ROOT/.pycache-build"
+export TMPDIR="$ROOT/.build-tmp"
+mkdir -p "$PYTHONPYCACHEPREFIX" "$TMPDIR"
+check_writable_path "$PYTHONPYCACHEPREFIX"
+check_writable_path "$TMPDIR"
 
 say "Checking sudo access"
 sudo -v || fail "This user needs sudo access to install/check packages."
@@ -107,8 +147,9 @@ run_step "Installing Tiny Macro and PyInstaller into the virtualenv" python -m p
 need_command pyinstaller "PyInstaller should have been installed in .venv-build/bin; activation may have failed."
 
 say "Cleaning old build output"
-rm -rf build dist/tiny-macro-wayland dist/README-WAYLAND.txt
+rm -rf build dist/tiny-macro-wayland dist/README-WAYLAND.txt "$PYTHONPYCACHEPREFIX" "$TMPDIR"
 mkdir -p dist
+mkdir -p "$PYTHONPYCACHEPREFIX" "$TMPDIR"
 
 run_step "Building one-file Wayland executable" pyinstaller --clean --noconfirm packaging/tiny-macro-wayland.spec
 
