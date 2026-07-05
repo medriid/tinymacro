@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tiny-macro"
+version = "0.1.0"
+description = "A tiny deterministic PyQt6 macro recorder for Linux desktops."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Tiny Macro Contributors" }]
+dependencies = [
+  "PyQt6>=6.7",
+  "pynput>=1.7.6",
+  "evdev>=1.7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2",
+  "pytest-qt>=4.4",
+]
+
+[project.scripts]
+tiny-macro = "tinymacro.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

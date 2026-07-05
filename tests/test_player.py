@@ -1,0 +1,46 @@
+from __future__ import annotations
+
+from tinymacro.backends.fake import FakeBackend
+from tinymacro.core.events import MacroEvent
+from tinymacro.core.macro import Macro
+from tinymacro.core.player import Player
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0
+
+    def __call__(self) -> int:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += max(1, int(seconds * 1_000_000_000))
+
+
+def test_player_uses_absolute_schedule_without_loop_drift():
+    backend = FakeBackend()
+    clock = FakeClock()
+    macro = Macro(
+        events=[
+            MacroEvent(0, "key", "press", key="a"),
+            MacroEvent(100_000_000, "key", "release", key="a"),
+        ]
+    )
+    player = Player(backend, clock_ns=clock, sleeper=clock.sleep)
+
+    player.start(macro, loop_count=3, speed=1.0, blocking=True)
+
+    assert [event.key for event in backend.emitted] == ["a", "a", "a", "a", "a", "a"]
+    assert clock.now == 300_000_000
+    assert not player.state.playing
+
+
+def test_player_speed_scales_duration():
+    backend = FakeBackend()
+    clock = FakeClock()
+    macro = Macro(events=[MacroEvent(100_000_000, "key", "press", key="a")])
+    player = Player(backend, clock_ns=clock, sleeper=clock.sleep)
+
+    player.start(macro, loop_count=1, speed=2.0, blocking=True)
+
+    assert clock.now == 50_000_000
