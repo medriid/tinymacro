@@ -83,6 +83,10 @@ class X11Backend(InputBackend):
                 listener.stop()
                 setattr(self, listener_name, None)
 
+    def pointer_position(self) -> tuple[int, int] | None:
+        x, y = self._mouse_controller.position
+        return int(x), int(y)
+
     def emit(self, event: MacroEvent) -> None:
         if event.kind == "mouse":
             if event.x is not None and event.y is not None:

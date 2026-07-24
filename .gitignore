@@ -4,6 +4,10 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .venv/
+.venv-build/
+.venv-windows-build/
+.build-tmp/
+.pycache-build/
 build/
 dist/
 *.egg-info/

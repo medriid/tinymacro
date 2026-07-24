@@ -49,3 +49,25 @@ def test_trim_and_scale_timing():
 def test_invalid_macro_format_rejected():
     with pytest.raises(ValueError):
         Macro.from_dict({"format": "other", "events": []})
+
+
+def test_legacy_wayland_mouse_button_key_is_repaired():
+    macro = Macro.from_dict(
+        {
+            "format": "tiny-macro",
+            "version": 1,
+            "metadata": {"backend": "wayland-evdev"},
+            "events": [
+                {
+                    "timestamp_ns": 100,
+                    "kind": "key",
+                    "action": "press",
+                    "key": "('left', 'mouse')",
+                }
+            ],
+        }
+    )
+
+    assert macro.events[0].kind == "mouse"
+    assert macro.events[0].button == "left"
+    assert macro.events[0].key is None

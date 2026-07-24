@@ -1,23 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from PyInstaller.utils.hooks import collect_submodules
 from pathlib import Path
 
 block_cipher = None
 project_root = Path(SPECPATH).parent
 
-hiddenimports = (
-    collect_submodules("pynput")
-    + collect_submodules("evdev")
-    + [
-        "PyQt6.QtCore",
-        "PyQt6.QtGui",
-        "PyQt6.QtWidgets",
-        "tinymacro.backends.evdev_wayland",
-        "tinymacro.backends.x11",
-        "tinymacro.gui.app",
-    ]
-)
+hiddenimports = [
+    "PyQt6.QtCore",
+    "PyQt6.QtGui",
+    "PyQt6.QtWidgets",
+    "tinymacro.backends.windows",
+    "tinymacro.gui.app",
+]
 
 a = Analysis(
     [str(project_root / "src" / "tinymacro" / "cli.py")],
@@ -28,7 +22,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "unittest"],
+    excludes=["tkinter", "unittest", "evdev"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -43,7 +37,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="tiny-macro-wayland",
+    name="tiny-macro-windows",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

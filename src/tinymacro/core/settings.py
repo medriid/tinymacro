@@ -6,9 +6,13 @@ from pathlib import Path
 from typing import Literal
 
 from .hotkeys import HotkeySet
-from tinymacro.notifications.discord import WebhookSettings
+from tinymacro.notifications.config import NotificationSettings
 
 ThemeName = Literal["system", "light", "dark"]
+
+# Built-in theme presets. "monochrome" is the default and keeps the original
+# black/white/gray identity; the others only add an accent hue on top of it.
+THEME_PRESETS = ("monochrome", "slate", "amber", "emerald", "violet")
 
 
 def default_config_path() -> Path:
@@ -21,33 +25,76 @@ class Settings:
     theme: ThemeName = "system"
     backend: str = "auto"
     always_on_top: bool = True
+    debug_mode: bool = False
     skip_final_click: bool = True
     loop_count: int = 1
     speed: float = 1.0
+    # Appearance
+    theme_preset: str = "monochrome"
+    accent_color: str = ""  # empty keeps the monochrome accent (black/white)
+    compact_mode: bool = True
+    animations: bool = True
+    tray_enabled: bool = True
+    # Capture / playback tuning
+    move_min_interval_ms: int = 0
+    humanize_jitter_ms: int = 0
+    # Reliability
+    autosave_seconds: int = 30
+    log_to_file: bool = True
     hotkeys: HotkeySet = field(default_factory=HotkeySet)
-    webhook: WebhookSettings = field(default_factory=WebhookSettings)
+    notifications: NotificationSettings = field(default_factory=NotificationSettings)
+
+    # ``webhook`` remains a convenience alias to the Discord channel so existing
+    # code/tests keep working after the notification system was generalized.
+    @property
+    def webhook(self):  # type: ignore[override]
+        return self.notifications.discord
+
+    @webhook.setter
+    def webhook(self, value) -> None:
+        self.notifications.discord = value
 
     def validate(self) -> None:
         if self.theme not in {"system", "light", "dark"}:
             raise ValueError("Invalid theme")
+        if self.theme_preset not in THEME_PRESETS:
+            raise ValueError("Invalid theme preset")
+        if self.accent_color:
+            _validate_hex(self.accent_color)
         if self.loop_count < 0:
             raise ValueError("Loop count must be zero or positive")
         if self.speed <= 0:
             raise ValueError("Speed must be positive")
+        if self.move_min_interval_ms < 0:
+            raise ValueError("Move sampling interval must be zero or positive")
+        if self.humanize_jitter_ms < 0:
+            raise ValueError("Humanize jitter must be zero or positive")
+        if self.autosave_seconds < 0:
+            raise ValueError("Autosave interval must be zero or positive")
         self.hotkeys.validate()
-        self.webhook.validate()
+        self.notifications.validate()
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "version": 1,
+            "version": 2,
             "theme": self.theme,
             "backend": self.backend,
             "always_on_top": self.always_on_top,
+            "debug_mode": self.debug_mode,
             "skip_final_click": self.skip_final_click,
             "loop_count": self.loop_count,
             "speed": self.speed,
+            "theme_preset": self.theme_preset,
+            "accent_color": self.accent_color,
+            "compact_mode": self.compact_mode,
+            "animations": self.animations,
+            "tray_enabled": self.tray_enabled,
+            "move_min_interval_ms": self.move_min_interval_ms,
+            "humanize_jitter_ms": self.humanize_jitter_ms,
+            "autosave_seconds": self.autosave_seconds,
+            "log_to_file": self.log_to_file,
             "hotkeys": self.hotkeys.to_dict(),
-            "webhook": self.webhook.to_dict(),
+            "notifications": self.notifications.to_dict(),
         }
 
     @classmethod
@@ -56,11 +103,21 @@ class Settings:
             theme=str(data.get("theme", "system")),  # type: ignore[arg-type]
             backend=str(data.get("backend", "auto")),
             always_on_top=bool(data.get("always_on_top", True)),
+            debug_mode=bool(data.get("debug_mode", False)),
             skip_final_click=bool(data.get("skip_final_click", True)),
             loop_count=int(data.get("loop_count", 1)),
             speed=float(data.get("speed", 1.0)),
+            theme_preset=str(data.get("theme_preset", "monochrome")),
+            accent_color=str(data.get("accent_color", "")),
+            compact_mode=bool(data.get("compact_mode", True)),
+            animations=bool(data.get("animations", True)),
+            tray_enabled=bool(data.get("tray_enabled", True)),
+            move_min_interval_ms=int(data.get("move_min_interval_ms", 0)),
+            humanize_jitter_ms=int(data.get("humanize_jitter_ms", 0)),
+            autosave_seconds=int(data.get("autosave_seconds", 30)),
+            log_to_file=bool(data.get("log_to_file", True)),
             hotkeys=HotkeySet.from_dict(data.get("hotkeys", {}) if isinstance(data.get("hotkeys"), dict) else {}),
-            webhook=WebhookSettings.from_dict(data.get("webhook", {}) if isinstance(data.get("webhook"), dict) else {}),
+            notifications=_load_notifications(data),
         )
         settings.validate()
         return settings
@@ -77,3 +134,18 @@ class Settings:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.validate()
         path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+
+
+def _load_notifications(data: dict[str, object]) -> NotificationSettings:
+    if isinstance(data.get("notifications"), dict):
+        return NotificationSettings.from_dict(data["notifications"])  # type: ignore[index]
+    # Migrate a v1 settings file that only had a bare ``webhook`` block.
+    if isinstance(data.get("webhook"), dict):
+        return NotificationSettings.from_legacy_webhook(data["webhook"])  # type: ignore[index]
+    return NotificationSettings()
+
+
+def _validate_hex(value: str) -> None:
+    text = value.strip().lstrip("#")
+    if len(text) != 6 or any(c not in "0123456789abcdefABCDEF" for c in text):
+        raise ValueError("Accent color must be a 6-digit hex value like #3b82f6")

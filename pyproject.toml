@@ -4,16 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tiny-macro"
-version = "0.1.0"
-description = "A tiny deterministic PyQt6 macro recorder for Linux desktops."
+version = "0.2.0"
+description = "A deterministic PyQt6 macro recorder for Linux and Windows desktops."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "Tiny Macro Contributors" }]
 dependencies = [
   "PyQt6>=6.7",
-  "pynput>=1.7.6",
-  "evdev>=1.7",
+  "pynput>=1.7.6; platform_system == 'Linux'",
+  "evdev>=1.7; platform_system == 'Linux'",
 ]
 
 [project.optional-dependencies]

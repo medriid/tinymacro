@@ -1,21 +1,77 @@
 # Tiny Macro
 
-Tiny Macro is a small monochrome PyQt6 macro recorder for Linux, designed as a
-TinyTask-style alternative for Arch Linux.
+Tiny Macro is a monochrome PyQt6 macro recorder for Linux and Windows, designed
+as a TinyTask-style alternative that scales up into a fuller automation tool
+without losing its lightweight, keep-it-on-top footprint.
 
 ## Features
 
-- Compact PyQt6 toolbar with open, save, record, play/stop, loop count, speed,
-  editor, preferences, and always-on-top controls.
+### Interface
+
+- Compact-by-default window (the classic toolbar footprint) that expands into a
+  live view with a playback progress bar and a real-time event feed while
+  recording. Toggle with the **Expand / Collapse** button or the View menu.
+- Monochrome black/white/gray identity by default, with optional color presets
+  (slate, amber, emerald, violet) and a custom accent color. Monochrome remains
+  a fully supported first-class theme.
+- Subtle animations: a pulsing record indicator, animated playback progress, and
+  transient toast notifications (all disableable in Preferences → Appearance).
+- Optional **system tray** icon with quick record/play/stop and show/hide.
+- Tabbed Preferences (General, Appearance, Capture, Hotkeys, Notifications,
+  Advanced).
+
+### Recording & playback
+
 - Deterministic playback based on monotonic nanosecond timestamps.
-- Native `.tmacro` JSON macro format.
-- Customizable global hotkeys.
-- X11 backend through `pynput`.
-- Wayland-oriented backend through `evdev`/`uinput`, requiring input-device and
-  uinput permissions.
-- Timeline editor for deleting events, trimming idle time, trimming selected
-  ranges, and scaling timing.
-- Exportable macro runner scripts.
+- **Pause/resume recording**, adjustable mouse-move sampling rate to thin dense
+  motion, and undo-last-segment while still recording.
+- **Pause/resume playback**, **step-through** one event at a time, and a
+  **dry-run validation** that checks a macro for structural problems without
+  sending real input.
+- Optional playback timing jitter for realistic QA/testing runs.
+- Cursor start-position recording with relative mouse motion accumulated into
+  absolute positions for exact replay.
+
+### Editing & composition
+
+- Rebuilt timeline editor: color-coded events by kind, search/filter, inline
+  note editing, insert **wait steps** (fixed or random-range delays), bulk
+  delete, keep-range, timing scale, and in-session **undo/redo**.
+- Macro composition helpers: chain/playlist multiple macros and repeat a macro
+  N times (see `Macro.then`, `Macro.chain`, `Macro.repeated`).
+
+### Automation & integrations
+
+- **Macro library**: a local index of your macros with favorites, tags, search,
+  recents, and run counts — independent of the OS file picker.
+- **Scheduler**: run a macro on an interval, once at a time, or daily.
+- **Settings profiles**: keep multiple named configurations and import/export
+  them as JSON.
+- **Pluggable notifications**: Discord webhook (with templated embeds and
+  optional screenshot), a generic HTTP(S) webhook, and native tray/toast
+  notifications on loop completion.
+- **Autosave & crash recovery** of an in-progress macro, plus structured
+  logging to a rotating file with an in-app log viewer.
+
+### Platform & format
+
+- X11 backend through `pynput`; Wayland backend through `evdev`/`uinput`;
+  Windows backend through native hooks and `SendInput`.
+- Native `.tmacro` JSON macro format, now at **format version 2** (adds wait
+  steps, per-event notes, and macro tags). Version-1 files load unchanged and
+  are transparently upgraded on load.
+- Exportable standalone macro runner scripts.
+- Customizable global hotkeys and an optional debug mode with detailed errors.
+
+> **Scope note:** Tiny Macro is a desktop automation and QA/testing tool.
+> Timing jitter exists to make test playback realistic, not to defeat
+> anti-cheat, anti-bot, or DRM systems.
+
+## Verifying without pytest
+
+If you don't have `pytest` installed, `python scripts/selfcheck.py` runs the
+non-GUI test suite using only the standard library. Install the `dev` extras and
+run `pytest` for the full suite, including the PyQt6 GUI smoke tests.
 
 ## Install On Arch Linux
 
@@ -99,6 +155,27 @@ ls -l /dev/input/event* | head
 
 Avoid running the full GUI as root except for a short temporary test.
 
+## Build A Sendable Windows EXE
+
+On Windows, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows.ps1
+```
+
+The build writes:
+
+```text
+dist\tiny-macro-windows.exe
+dist\README-WINDOWS.txt
+```
+
+The Windows build uses native low-level keyboard/mouse hooks for global capture
+and hotkeys, and `SendInput` for playback. Normal desktop apps should work. To
+control elevated/admin apps, run Tiny Macro as administrator too. Some games,
+anti-cheat software, raw-input apps, or protected windows may block synthetic
+input.
+
 ## File Format
 
 Macros are saved as structured `.tmacro` JSON files. They are not binary
@@ -108,3 +185,12 @@ compatible with TinyTask `.rec` files.
 
 Always test a macro once at normal speed before looping it. `Pause`, `Break`,
 and `ScrollLock` are reserved as emergency stop keys by default.
+
+Enable debug mode in Preferences when diagnosing playback or recording issues.
+In debug mode, Tiny Macro shows detailed error dialogs instead of only updating
+the status bar.
+
+On Wayland, exact cursor anchoring depends on what the compositor exposes.
+Hyprland cursor position is detected through `hyprctl` when available. Other
+Wayland compositors may still replay relative movement accurately but cannot
+always reveal the initial global cursor position to normal apps.

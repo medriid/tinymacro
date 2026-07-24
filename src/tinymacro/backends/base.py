@@ -3,11 +3,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TypeAlias
 
 from tinymacro.core.events import MacroEvent
 
 EventCallback = Callable[[MacroEvent], None]
 HotkeyCallback = Callable[[frozenset[str]], None]
+PointerPosition: TypeAlias = tuple[int, int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +41,9 @@ class InputBackend(ABC):
 
     def stop_hotkeys(self) -> None:
         pass
+
+    def pointer_position(self) -> PointerPosition | None:
+        return None
 
     def close(self) -> None:
         self.stop_capture()

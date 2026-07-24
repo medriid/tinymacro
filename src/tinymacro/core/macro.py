@@ -4,11 +4,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-from typing import Any
+import random
+from typing import Any, Iterable
 
 from .events import MacroEvent
 
-FORMAT_VERSION = 1
+# v2 adds optional per-event fields (duration/jitter/note) and macro-level tags.
+# Readers stay backward compatible: v1 files load unchanged, and v2 files only
+# carry the new keys when they are actually used.
+FORMAT_VERSION = 2
 NANOSECONDS_PER_SECOND = 1_000_000_000
 
 
@@ -20,20 +24,37 @@ class Macro:
     screen_geometry: str = ""
     keyboard_layout: str = ""
     name: str = "Untitled"
+    tags: tuple[str, ...] = ()
+    description: str = ""
 
+    # -- timing ---------------------------------------------------------------
     @property
     def duration_ns(self) -> int:
         if not self.events:
             return 0
-        return max(event.timestamp_ns for event in self.events)
+        return max(self._event_end_ns(event) for event in self.events)
 
     @property
     def duration_s(self) -> float:
         return self.duration_ns / NANOSECONDS_PER_SECOND
 
+    @staticmethod
+    def _event_end_ns(event: MacroEvent) -> int:
+        end = event.timestamp_ns
+        if event.kind == "wait":
+            end += event.duration_ns + event.jitter_ns
+        return end
+
     def sorted_events(self) -> list[MacroEvent]:
         return sorted(self.events, key=lambda event: event.timestamp_ns)
 
+    def input_event_count(self) -> int:
+        return sum(1 for event in self.events if event.is_input)
+
+    def wait_event_count(self) -> int:
+        return sum(1 for event in self.events if event.kind == "wait")
+
+    # -- normalization / editing ---------------------------------------------
     def normalized(self) -> "Macro":
         events = self.sorted_events()
         if not events:
@@ -68,6 +89,70 @@ class Macro:
             raise ValueError("Timing scale must be positive")
         return self.copy_with(events=[event.scaled(factor) for event in self.sorted_events()]).normalized()
 
+    def replace_event(self, index: int, event: MacroEvent) -> "Macro":
+        events = self.sorted_events()
+        if not 0 <= index < len(events):
+            raise IndexError("Event index out of range")
+        events[index] = event
+        return self.copy_with(events=events).normalized()
+
+    def insert_wait(self, index: int, duration_ns: int, jitter_ns: int = 0, note: str = "") -> "Macro":
+        """Insert a wait step before ``index`` and push later events back."""
+        events = self.sorted_events()
+        index = max(0, min(index, len(events)))
+        at_ns = events[index].timestamp_ns if index < len(events) else self.duration_ns
+        wait = MacroEvent.wait(at_ns, duration_ns, jitter_ns, note)
+        shifted = [
+            event.shifted(duration_ns + jitter_ns) if event.timestamp_ns >= at_ns else event
+            for event in events
+        ]
+        shifted.insert(index, wait)
+        return self.copy_with(events=shifted).normalized()
+
+    def set_note(self, index: int, note: str) -> "Macro":
+        events = self.sorted_events()
+        if not 0 <= index < len(events):
+            raise IndexError("Event index out of range")
+        events[index] = events[index].replace(note=note)
+        return self.copy_with(events=events)
+
+    # -- composition ----------------------------------------------------------
+    def then(self, other: "Macro", gap_ns: int = 0) -> "Macro":
+        """Append ``other`` after this macro, separated by ``gap_ns``."""
+        offset = self.duration_ns + max(0, gap_ns)
+        combined = self.sorted_events() + [event.shifted(offset) for event in other.sorted_events()]
+        return self.copy_with(events=combined).normalized()
+
+    @classmethod
+    def chain(cls, macros: Iterable["Macro"], gap_ns: int = 0, name: str = "Chained") -> "Macro":
+        result: Macro | None = None
+        for macro in macros:
+            result = macro.copy_with() if result is None else result.then(macro, gap_ns=gap_ns)
+        if result is None:
+            return cls(name=name)
+        return result.copy_with(name=name)
+
+    def repeated(self, times: int, gap_ns: int = 0) -> "Macro":
+        if times < 1:
+            raise ValueError("Repeat count must be at least 1")
+        return Macro.chain([self] * times, gap_ns=gap_ns, name=self.name)
+
+    def humanized(self, jitter_ns: int, seed: int | None = None) -> "Macro":
+        """Add up to ``jitter_ns`` of positive timing jitter to each event.
+
+        This is intended for realistic QA/testing playback, not for defeating
+        detection systems. Order is preserved (jitter never reorders events).
+        """
+        if jitter_ns < 0:
+            raise ValueError("Jitter must be zero or positive")
+        rng = random.Random(seed)
+        cumulative = 0
+        events: list[MacroEvent] = []
+        for event in self.sorted_events():
+            cumulative += rng.randint(0, jitter_ns)
+            events.append(event.shifted(cumulative))
+        return self.copy_with(events=events).normalized()
+
     def copy_with(self, **changes: Any) -> "Macro":
         data = {
             "events": list(self.events),
@@ -76,22 +161,31 @@ class Macro:
             "screen_geometry": self.screen_geometry,
             "keyboard_layout": self.keyboard_layout,
             "name": self.name,
+            "tags": tuple(self.tags),
+            "description": self.description,
         }
         data.update(changes)
+        if "tags" in data:
+            data["tags"] = tuple(data["tags"])
         return Macro(**data)
 
+    # -- serialization --------------------------------------------------------
     def to_dict(self) -> dict[str, Any]:
         return {
             "format": "tiny-macro",
             "version": FORMAT_VERSION,
             "created_at": self.created_at,
             "name": self.name,
+            "tags": list(self.tags),
+            "description": self.description,
             "metadata": {
                 "backend": self.backend,
                 "screen_geometry": self.screen_geometry,
                 "keyboard_layout": self.keyboard_layout,
                 "duration_ns": self.duration_ns,
                 "event_count": len(self.events),
+                "input_event_count": self.input_event_count(),
+                "wait_event_count": self.wait_event_count(),
             },
             "events": [event.to_dict() for event in self.sorted_events()],
         }
@@ -103,6 +197,8 @@ class Macro:
         if int(data.get("version", 0)) > FORMAT_VERSION:
             raise ValueError("Macro file was created by a newer version")
         metadata = data.get("metadata", {})
+        raw_tags = data.get("tags", [])
+        tags = tuple(str(tag) for tag in raw_tags) if isinstance(raw_tags, (list, tuple)) else ()
         return cls(
             events=[MacroEvent.from_dict(item) for item in data.get("events", [])],
             created_at=data.get("created_at") or datetime.now(timezone.utc).isoformat(),
@@ -110,6 +206,8 @@ class Macro:
             screen_geometry=metadata.get("screen_geometry", ""),
             keyboard_layout=metadata.get("keyboard_layout", ""),
             name=data.get("name", "Untitled"),
+            tags=tags,
+            description=str(data.get("description", "")),
         ).normalized()
 
     def save(self, path: str | Path) -> None:

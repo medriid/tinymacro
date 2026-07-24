@@ -17,6 +17,11 @@ class FakeClock:
         self.now += max(1, int(seconds * 1_000_000_000))
 
 
+class FailingBackend(FakeBackend):
+    def emit(self, event: MacroEvent) -> None:
+        raise RuntimeError("emit failed")
+
+
 def test_player_uses_absolute_schedule_without_loop_drift():
     backend = FakeBackend()
     clock = FakeClock()
@@ -57,3 +62,16 @@ def test_player_calls_loop_complete_after_each_loop():
     player.start(macro, loop_count=2, speed=1.0, blocking=True)
 
     assert calls == [(1, 2, 1.0, 10_000_000), (2, 2, 1.0, 10_000_000)]
+
+
+def test_player_reports_emit_errors():
+    errors = []
+    macro = Macro(events=[MacroEvent(0, "key", "press", key="a")])
+    player = Player(FailingBackend())
+    player.on_error = errors.append
+
+    player.start(macro, blocking=True)
+
+    assert len(errors) == 1
+    assert "emit failed" in str(errors[0])
+    assert not player.state.playing

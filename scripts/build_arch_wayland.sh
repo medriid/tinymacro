@@ -13,6 +13,20 @@ PACMAN_PACKAGES=(
   libxkbcommon
   libxkbcommon-x11
   libxcb
+  fontconfig
+  freetype2
+  libx11
+  libxrender
+  libxext
+  libxi
+  libxrandr
+  libxfixes
+  libxcursor
+  libxinerama
+  libglvnd
+  mesa
+  xcb-util-keysyms
+  xcb-util-wm
   xcb-util-cursor
   wayland
 )

@@ -6,99 +6,193 @@ from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
-    QGroupBox,
     QLineEdit,
     QMessageBox,
     QSpinBox,
     QDoubleSpinBox,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
+    QWidget,
 )
 
 from tinymacro.core.hotkeys import Hotkey, HotkeySet
-from tinymacro.core.settings import Settings
+from tinymacro.core.settings import THEME_PRESETS, Settings
 
 
 class PreferencesDialog(QDialog):
+    """Tabbed preferences covering every configurable area of Tiny Macro."""
+
     def __init__(self, settings: Settings, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Preferences")
         self.settings = settings
-        self.theme = QComboBox()
-        self.theme.addItems(["system", "light", "dark"])
-        self.theme.setCurrentText(settings.theme)
+        self.resize(640, 560)
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_general_tab(), "General")
+        self.tabs.addTab(self._build_appearance_tab(), "Appearance")
+        self.tabs.addTab(self._build_capture_tab(), "Capture")
+        self.tabs.addTab(self._build_hotkeys_tab(), "Hotkeys")
+        self.tabs.addTab(self._build_notifications_tab(), "Notifications")
+        self.tabs.addTab(self._build_advanced_tab(), "Advanced")
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.tabs)
+        layout.addWidget(buttons)
+
+    # -- tab builders ---------------------------------------------------------
+    def _build_general_tab(self) -> QWidget:
+        s = self.settings
         self.backend = QComboBox()
-        self.backend.addItems(["auto", "x11", "wayland", "fake"])
-        self.backend.setCurrentText(settings.backend)
+        self.backend.addItems(["auto", "x11", "wayland", "windows", "fake"])
+        self.backend.setCurrentText(s.backend)
         self.always_on_top = QCheckBox()
-        self.always_on_top.setChecked(settings.always_on_top)
-        self.skip_final_click = QCheckBox()
-        self.skip_final_click.setChecked(settings.skip_final_click)
+        self.always_on_top.setChecked(s.always_on_top)
         self.loop_count = QSpinBox()
         self.loop_count.setRange(0, 999_999)
-        self.loop_count.setValue(settings.loop_count)
+        self.loop_count.setValue(s.loop_count)
         self.speed = QDoubleSpinBox()
         self.speed.setRange(0.01, 100.0)
         self.speed.setSingleStep(0.25)
-        self.speed.setValue(settings.speed)
-        self.record_hotkey = QLineEdit(str(settings.hotkeys.record))
-        self.play_hotkey = QLineEdit(str(settings.hotkeys.play))
-        self.stop_hotkey = QLineEdit(str(settings.hotkeys.stop))
-        self.emergency_hotkeys = QLineEdit(", ".join(str(key) for key in settings.hotkeys.emergency))
-        self.webhook_enabled = QCheckBox()
-        self.webhook_enabled.setChecked(settings.webhook.enabled)
-        self.webhook_url = QLineEdit(settings.webhook.url)
-        self.webhook_url.setEchoMode(QLineEdit.EchoMode.Password)
-        self.webhook_every = QSpinBox()
-        self.webhook_every.setRange(1, 999_999)
-        self.webhook_every.setValue(settings.webhook.every_loops)
-        self.webhook_screenshot = QCheckBox()
-        self.webhook_screenshot.setChecked(settings.webhook.include_screenshot)
-        self.webhook_username = QLineEdit(settings.webhook.embed.username)
-        self.webhook_title = QLineEdit(settings.webhook.embed.title)
-        self.webhook_description = QTextEdit(settings.webhook.embed.description)
-        self.webhook_description.setFixedHeight(72)
-        self.webhook_footer = QLineEdit(settings.webhook.embed.footer)
-        self.webhook_color = QLineEdit(settings.webhook.embed.color)
-        self.webhook_image = QLineEdit(settings.webhook.embed.image)
-        self.webhook_fields = QTextEdit(settings.webhook.embed.fields)
-        self.webhook_fields.setFixedHeight(72)
+        self.speed.setValue(s.speed)
+        self.tray_enabled = QCheckBox()
+        self.tray_enabled.setChecked(s.tray_enabled)
+
+        form = QFormLayout()
+        form.addRow("Backend", self.backend)
+        form.addRow("Always on top", self.always_on_top)
+        form.addRow("Default loops (0 = infinite)", self.loop_count)
+        form.addRow("Default speed", self.speed)
+        form.addRow("Show system tray icon", self.tray_enabled)
+        return _wrap(form)
+
+    def _build_appearance_tab(self) -> QWidget:
+        s = self.settings
+        self.theme = QComboBox()
+        self.theme.addItems(["system", "light", "dark"])
+        self.theme.setCurrentText(s.theme)
+        self.theme_preset = QComboBox()
+        self.theme_preset.addItems(list(THEME_PRESETS))
+        self.theme_preset.setCurrentText(s.theme_preset)
+        self.accent_color = QLineEdit(s.accent_color)
+        self.accent_color.setPlaceholderText("#3b82f6 (blank = monochrome)")
+        self.compact_mode = QCheckBox()
+        self.compact_mode.setChecked(s.compact_mode)
+        self.animations = QCheckBox()
+        self.animations.setChecked(s.animations)
 
         form = QFormLayout()
         form.addRow("Theme", self.theme)
-        form.addRow("Backend", self.backend)
-        form.addRow("Always on top", self.always_on_top)
-        form.addRow("Skip final click", self.skip_final_click)
-        form.addRow("Default loops", self.loop_count)
-        form.addRow("Default speed", self.speed)
-        form.addRow("Record hotkey", self.record_hotkey)
-        form.addRow("Play hotkey", self.play_hotkey)
-        form.addRow("Stop hotkey", self.stop_hotkey)
-        form.addRow("Emergency keys", self.emergency_hotkeys)
+        form.addRow("Color preset", self.theme_preset)
+        form.addRow("Custom accent", self.accent_color)
+        form.addRow("Start in compact mode", self.compact_mode)
+        form.addRow("Enable animations", self.animations)
+        return _wrap(form)
 
-        webhook_form = QFormLayout()
-        webhook_form.addRow("Enabled", self.webhook_enabled)
-        webhook_form.addRow("Webhook URL", self.webhook_url)
-        webhook_form.addRow("Send every loops", self.webhook_every)
-        webhook_form.addRow("Attach screenshot", self.webhook_screenshot)
-        webhook_form.addRow("Username", self.webhook_username)
-        webhook_form.addRow("Title", self.webhook_title)
-        webhook_form.addRow("Description", self.webhook_description)
-        webhook_form.addRow("Footer", self.webhook_footer)
-        webhook_form.addRow("Color", self.webhook_color)
-        webhook_form.addRow("Image", self.webhook_image)
-        webhook_form.addRow("Fields", self.webhook_fields)
-        webhook_group = QGroupBox("Discord Webhook")
-        webhook_group.setLayout(webhook_form)
+    def _build_capture_tab(self) -> QWidget:
+        s = self.settings
+        self.skip_final_click = QCheckBox()
+        self.skip_final_click.setChecked(s.skip_final_click)
+        self.move_min_interval = QSpinBox()
+        self.move_min_interval.setRange(0, 1000)
+        self.move_min_interval.setSuffix(" ms")
+        self.move_min_interval.setValue(s.move_min_interval_ms)
+        self.humanize_jitter = QSpinBox()
+        self.humanize_jitter.setRange(0, 5000)
+        self.humanize_jitter.setSuffix(" ms")
+        self.humanize_jitter.setValue(s.humanize_jitter_ms)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self._accept)
-        buttons.rejected.connect(self.reject)
-        layout = QVBoxLayout(self)
-        layout.addLayout(form)
-        layout.addWidget(webhook_group)
-        layout.addWidget(buttons)
+        form = QFormLayout()
+        form.addRow("Skip final click on stop", self.skip_final_click)
+        form.addRow("Mouse-move sampling interval", self.move_min_interval)
+        form.addRow("Playback timing jitter (QA realism)", self.humanize_jitter)
+        return _wrap(form)
 
+    def _build_hotkeys_tab(self) -> QWidget:
+        h = self.settings.hotkeys
+        self.record_hotkey = QLineEdit(str(h.record))
+        self.play_hotkey = QLineEdit(str(h.play))
+        self.stop_hotkey = QLineEdit(str(h.stop))
+        self.emergency_hotkeys = QLineEdit(", ".join(str(key) for key in h.emergency))
+
+        form = QFormLayout()
+        form.addRow("Record", self.record_hotkey)
+        form.addRow("Play", self.play_hotkey)
+        form.addRow("Stop", self.stop_hotkey)
+        form.addRow("Emergency stop keys", self.emergency_hotkeys)
+        return _wrap(form)
+
+    def _build_notifications_tab(self) -> QWidget:
+        n = self.settings.notifications
+        # Discord
+        self.webhook_enabled = QCheckBox()
+        self.webhook_enabled.setChecked(n.discord.enabled)
+        self.webhook_url = QLineEdit(n.discord.url)
+        self.webhook_url.setEchoMode(QLineEdit.EchoMode.Password)
+        self.webhook_every = QSpinBox()
+        self.webhook_every.setRange(1, 999_999)
+        self.webhook_every.setValue(n.discord.every_loops)
+        self.webhook_screenshot = QCheckBox()
+        self.webhook_screenshot.setChecked(n.discord.include_screenshot)
+        self.webhook_title = QLineEdit(n.discord.embed.title)
+        self.webhook_description = QTextEdit(n.discord.embed.description)
+        self.webhook_description.setFixedHeight(60)
+        self.webhook_color = QLineEdit(n.discord.embed.color)
+        # Generic webhook
+        self.generic_enabled = QCheckBox()
+        self.generic_enabled.setChecked(n.generic.enabled)
+        self.generic_url = QLineEdit(n.generic.url)
+        self.generic_every = QSpinBox()
+        self.generic_every.setRange(1, 999_999)
+        self.generic_every.setValue(n.generic.every_loops)
+        self.generic_template = QLineEdit(n.generic.template)
+        # Tray
+        self.tray_notify = QCheckBox()
+        self.tray_notify.setChecked(n.tray.notify_on_finish)
+
+        form = QFormLayout()
+        form.addRow("— Discord webhook —", QWidget())
+        form.addRow("Enabled", self.webhook_enabled)
+        form.addRow("URL", self.webhook_url)
+        form.addRow("Send every N loops", self.webhook_every)
+        form.addRow("Attach screenshot", self.webhook_screenshot)
+        form.addRow("Embed title", self.webhook_title)
+        form.addRow("Embed description", self.webhook_description)
+        form.addRow("Embed color", self.webhook_color)
+        form.addRow("— Generic webhook —", QWidget())
+        form.addRow("Enabled", self.generic_enabled)
+        form.addRow("URL", self.generic_url)
+        form.addRow("Send every N loops", self.generic_every)
+        form.addRow("Message template", self.generic_template)
+        form.addRow("— Tray / toast —", QWidget())
+        form.addRow("Notify when playback finishes", self.tray_notify)
+        return _wrap(form)
+
+    def _build_advanced_tab(self) -> QWidget:
+        s = self.settings
+        self.debug_mode = QCheckBox()
+        self.debug_mode.setChecked(s.debug_mode)
+        self.log_to_file = QCheckBox()
+        self.log_to_file.setChecked(s.log_to_file)
+        self.autosave_seconds = QSpinBox()
+        self.autosave_seconds.setRange(0, 3600)
+        self.autosave_seconds.setSuffix(" s")
+        self.autosave_seconds.setValue(s.autosave_seconds)
+
+        form = QFormLayout()
+        form.addRow("Debug mode (detailed errors)", self.debug_mode)
+        form.addRow("Write log file", self.log_to_file)
+        form.addRow("Autosave interval (0 = off)", self.autosave_seconds)
+        return _wrap(form)
+
+    # -- commit ---------------------------------------------------------------
     def _accept(self) -> None:
         try:
             emergency = tuple(
@@ -113,26 +207,48 @@ class PreferencesDialog(QDialog):
                 emergency=emergency,
             )
             hotkeys.validate()
-            self.settings.theme = self.theme.currentText()  # type: ignore[assignment]
-            self.settings.backend = self.backend.currentText()
-            self.settings.always_on_top = self.always_on_top.isChecked()
-            self.settings.skip_final_click = self.skip_final_click.isChecked()
-            self.settings.loop_count = self.loop_count.value()
-            self.settings.speed = self.speed.value()
-            self.settings.hotkeys = hotkeys
-            self.settings.webhook.enabled = self.webhook_enabled.isChecked()
-            self.settings.webhook.url = self.webhook_url.text().strip()
-            self.settings.webhook.every_loops = self.webhook_every.value()
-            self.settings.webhook.include_screenshot = self.webhook_screenshot.isChecked()
-            self.settings.webhook.embed.username = self.webhook_username.text().strip() or "Tiny Macro"
-            self.settings.webhook.embed.title = self.webhook_title.text()
-            self.settings.webhook.embed.description = self.webhook_description.toPlainText()
-            self.settings.webhook.embed.footer = self.webhook_footer.text()
-            self.settings.webhook.embed.color = self.webhook_color.text()
-            self.settings.webhook.embed.image = self.webhook_image.text()
-            self.settings.webhook.embed.fields = self.webhook_fields.toPlainText()
-            self.settings.validate()
+
+            s = self.settings
+            s.theme = self.theme.currentText()  # type: ignore[assignment]
+            s.theme_preset = self.theme_preset.currentText()
+            s.accent_color = self.accent_color.text().strip()
+            s.compact_mode = self.compact_mode.isChecked()
+            s.animations = self.animations.isChecked()
+            s.backend = self.backend.currentText()
+            s.always_on_top = self.always_on_top.isChecked()
+            s.tray_enabled = self.tray_enabled.isChecked()
+            s.debug_mode = self.debug_mode.isChecked()
+            s.skip_final_click = self.skip_final_click.isChecked()
+            s.move_min_interval_ms = self.move_min_interval.value()
+            s.humanize_jitter_ms = self.humanize_jitter.value()
+            s.loop_count = self.loop_count.value()
+            s.speed = self.speed.value()
+            s.log_to_file = self.log_to_file.isChecked()
+            s.autosave_seconds = self.autosave_seconds.value()
+            s.hotkeys = hotkeys
+
+            n = s.notifications
+            n.discord.enabled = self.webhook_enabled.isChecked()
+            n.discord.url = self.webhook_url.text().strip()
+            n.discord.every_loops = self.webhook_every.value()
+            n.discord.include_screenshot = self.webhook_screenshot.isChecked()
+            n.discord.embed.title = self.webhook_title.text()
+            n.discord.embed.description = self.webhook_description.toPlainText()
+            n.discord.embed.color = self.webhook_color.text()
+            n.generic.enabled = self.generic_enabled.isChecked()
+            n.generic.url = self.generic_url.text().strip()
+            n.generic.every_loops = self.generic_every.value()
+            n.generic.template = self.generic_template.text()
+            n.tray.notify_on_finish = self.tray_notify.isChecked()
+
+            s.validate()
         except Exception as exc:
             QMessageBox.warning(self, "Invalid preferences", str(exc))
             return
         self.accept()
+
+
+def _wrap(form: QFormLayout) -> QWidget:
+    widget = QWidget()
+    widget.setLayout(form)
+    return widget
