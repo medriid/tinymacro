@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from datetime import datetime
+import time
 from pathlib import Path
 import subprocess
 import threading
@@ -101,6 +102,7 @@ class MainWindow(QMainWindow):
         # so image steps fall back to their on_missing rule.
         self.player.locator_factory = (lambda: Locator()) if CAPTURE_AVAILABLE else None
         self.player.on_image_missed = self._on_image_missed
+        self.player.allow_code_execution = settings.allow_code_execution
         self.bridge = PlaybackSignalBridge(self)
         self.bridge.loop_completed.connect(self._handle_loop_completed)
         self.bridge.notify_error.connect(lambda message: self._toast(message, "error"))
@@ -136,6 +138,9 @@ class MainWindow(QMainWindow):
         self._active_image_schedule: Schedule | None = None
         self._countdown_active = False
         self._countdown_left = 0
+        # Last non-Tiny-Macro window to hold focus, so keyboard playback can be
+        # directed back to the user's target window instead of at our own window.
+        self._last_external_hwnd = 0
 
         self.setWindowTitle("Tiny Macro")
         self.setWindowIcon(app_icon())
@@ -428,6 +433,7 @@ class MainWindow(QMainWindow):
         macro = self.macro
         if self.settings.humanize_jitter_ms > 0:
             macro = macro.humanized(self.settings.humanize_jitter_ms * 1_000_000)
+        self._restore_target_focus(macro)
         self.player.on_loop_complete = self._emit_loop_completed
         try:
             self.player.start(macro, loop_count=self.settings.loop_count, speed=self.settings.speed)
@@ -584,6 +590,7 @@ class MainWindow(QMainWindow):
         if not (0 <= index < len(events)):
             return
         tail = self.macro.copy_with(events=events[index:]).normalized()
+        self._restore_target_focus(tail)
         try:
             self.player.start(tail, loop_count=1, speed=self.speed_spin.value())
         except Exception as exc:  # noqa: BLE001
@@ -625,6 +632,7 @@ class MainWindow(QMainWindow):
         dialog = PreferencesDialog(self.settings, self)
         if dialog.exec():
             self._persist()
+            self.player.allow_code_execution = self.settings.allow_code_execution
             self._sync_playback_controls_from_settings()
             app = QApplication.instance()
             if app:
@@ -910,9 +918,35 @@ class MainWindow(QMainWindow):
             self.log.info("Image trigger %s reached its fire limit", schedule.display_name)
             self._refresh_image_watcher()
 
+    def _restore_target_focus(self, macro: Macro) -> None:
+        """Before keyboard playback, hand focus back to the user's target window.
+
+        Keyboard events go to whatever window is focused; clicking Play focuses
+        Tiny Macro, so a keyboard-only macro would otherwise type into us. Mouse
+        events are coordinate-based and unaffected, so we only bother for macros
+        that contain key events.
+        """
+        if not self._last_external_hwnd:
+            return
+        if not any(event.kind == "key" for event in macro.events):
+            return
+        try:
+            if self.backend.focus_window(self._last_external_hwnd):
+                time.sleep(0.06)  # let the target actually gain focus
+        except Exception:  # noqa: BLE001
+            pass
+
     def _tick(self) -> None:
         self._update_state()
         self._finish_image_trigger_if_done()
+        # Continuously remember the user's target window (any focused window that
+        # isn't ours), so keyboard playback can be directed back to it.
+        try:
+            hwnd = self.backend.foreground_window_if_external()
+        except Exception:  # noqa: BLE001
+            hwnd = 0
+        if hwnd:
+            self._last_external_hwnd = hwnd
         if self.recorder.recording and self.settings.compact_mode is False:
             self._update_feed()
 

@@ -45,6 +45,18 @@ class InputBackend(ABC):
     def pointer_position(self) -> PointerPosition | None:
         return None
 
+    def foreground_window_if_external(self) -> int:
+        """Handle of the focused window if it belongs to another process, else 0.
+
+        Used to remember the user's target window so keyboard playback can be
+        directed there instead of at Tiny Macro. Backends that can't tell return 0.
+        """
+        return 0
+
+    def focus_window(self, handle: int) -> bool:
+        """Best-effort: give keyboard focus to ``handle`` before playback."""
+        return False
+
     def close(self) -> None:
         self.stop_capture()
         self.stop_hotkeys()

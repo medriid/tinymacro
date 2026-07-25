@@ -168,6 +168,15 @@ class Locator:
         frame, _ox, _oy = self._grab(region)
         return encode_png(frame)
 
+    def pixel_rgb(self, x: int, y: int) -> tuple[int, int, int] | None:
+        """Return the (r, g, b) colour of the screen pixel at ``(x, y)``."""
+        try:
+            frame, _ox, _oy = self._grab((int(x), int(y), 1, 1))
+            b, g, r = (int(v) for v in frame[0, 0][:3])  # mss/OpenCV are BGR
+            return (r, g, b)
+        except Exception:  # noqa: BLE001
+            return None
+
     def locate(
         self,
         needle_png: bytes,

@@ -10,8 +10,24 @@ from typing import Any, Literal
 # ``image`` is a synthetic step (format v3) that, at playback time, searches the
 # screen for an embedded target image and clicks it once found. It emits no input
 # directly; the player synthesizes the click, so ``is_input`` is False for it.
-EventKind = Literal["key", "mouse", "wheel", "wait", "image"]
-EventAction = Literal["press", "release", "move", "scroll", "delay", "click"]
+# Beyond raw input and waits, macros can carry synthetic control/automation
+# steps handled entirely by the player:
+#   run     - execute a shell command or Python snippet (opt-in, off by default)
+#   pixel   - block until a screen pixel matches a colour
+#   window  - block until the active window title matches
+#   if/else/endif, loop/endloop - block-structured conditionals and loops
+EventKind = Literal[
+    "key", "mouse", "wheel", "wait", "image",
+    "run", "pixel", "window", "if", "else", "endif", "loop", "endloop",
+]
+EventAction = Literal[
+    "press", "release", "move", "scroll", "delay", "click",
+    "wait", "shell", "python", "branch", "repeat", "noop",
+]
+
+# Only these kinds produce real input that is emitted to a backend; everything
+# else is interpreted by the player.
+INPUT_KINDS = ("key", "mouse", "wheel")
 
 # Bumped alongside macro.FORMAT_VERSION when the on-disk shape grows. New
 # optional fields are only written when they differ from their defaults so that
@@ -61,6 +77,11 @@ class MacroEvent:
     offset_y: int = 0
     grayscale: bool = True
     region: tuple[int, int, int, int] | None = None
+    # Generic string payload for run/pixel/window/loop steps: a command or Python
+    # snippet, a target colour hex, a window-title substring, etc.
+    command: str = ""
+    # Repeat count for ``loop`` steps (0 = infinite until stopped).
+    count: int = 0
 
     # -- construction helpers -------------------------------------------------
     @classmethod
@@ -106,14 +127,120 @@ class MacroEvent:
             note=note,
         )
 
+    @classmethod
+    def run_step(
+        cls,
+        timestamp_ns: int,
+        command: str,
+        *,
+        mode: str = "shell",
+        timeout_ms: int = 10_000,
+        on_missing: OnMissing = "fail",
+        note: str = "",
+    ) -> "MacroEvent":
+        return cls(
+            timestamp_ns=timestamp_ns,
+            kind="run",
+            action="python" if mode == "python" else "shell",
+            command=command,
+            timeout_ms=max(0, int(timeout_ms)),
+            on_missing=on_missing,
+            note=note,
+        )
+
+    @classmethod
+    def wait_pixel(
+        cls,
+        timestamp_ns: int,
+        x: int,
+        y: int,
+        color: str,
+        *,
+        tolerance: float = 0.05,
+        timeout_ms: int = DEFAULT_TIMEOUT_MS,
+        on_missing: OnMissing = "fail",
+        note: str = "",
+    ) -> "MacroEvent":
+        return cls(
+            timestamp_ns=timestamp_ns,
+            kind="pixel",
+            action="wait",
+            x=int(x),
+            y=int(y),
+            command=color,
+            confidence=float(tolerance),
+            timeout_ms=max(0, int(timeout_ms)),
+            on_missing=on_missing,
+            note=note,
+        )
+
+    @classmethod
+    def wait_window(
+        cls,
+        timestamp_ns: int,
+        title: str,
+        *,
+        timeout_ms: int = DEFAULT_TIMEOUT_MS,
+        on_missing: OnMissing = "fail",
+        note: str = "",
+    ) -> "MacroEvent":
+        return cls(
+            timestamp_ns=timestamp_ns,
+            kind="window",
+            action="wait",
+            command=title,
+            timeout_ms=max(0, int(timeout_ms)),
+            on_missing=on_missing,
+            note=note,
+        )
+
+    @classmethod
+    def if_image(
+        cls,
+        timestamp_ns: int,
+        image_b64: str,
+        *,
+        confidence: float = DEFAULT_CONFIDENCE,
+        timeout_ms: int = 1500,
+        region: tuple[int, int, int, int] | None = None,
+        grayscale: bool = True,
+        note: str = "",
+    ) -> "MacroEvent":
+        """An ``if`` whose condition is 'the image is visible' (short timeout)."""
+        return cls(
+            timestamp_ns=timestamp_ns,
+            kind="if",
+            action="branch",
+            image_b64=image_b64,
+            confidence=float(confidence),
+            timeout_ms=max(0, int(timeout_ms)),
+            region=tuple(region) if region else None,  # type: ignore[arg-type]
+            grayscale=bool(grayscale),
+            note=note,
+        )
+
+    @classmethod
+    def loop_start(cls, timestamp_ns: int, count: int, note: str = "") -> "MacroEvent":
+        return cls(timestamp_ns=timestamp_ns, kind="loop", action="repeat", count=max(0, int(count)), note=note)
+
+    @classmethod
+    def control(cls, timestamp_ns: int, kind: str, note: str = "") -> "MacroEvent":
+        """Build a bare control marker (else/endif/endloop)."""
+        return cls(timestamp_ns=timestamp_ns, kind=kind, action="noop", note=note)  # type: ignore[arg-type]
+
     @property
     def is_input(self) -> bool:
         """True when the event produces real input (i.e. should be emitted).
 
-        Synthetic steps (``wait``, ``image``) return False: the player handles
-        them specially rather than sending them straight to a backend.
+        Synthetic/control steps return False: the player interprets them rather
+        than sending them straight to a backend.
         """
-        return self.kind not in ("wait", "image")
+        return self.kind in INPUT_KINDS
+
+    @property
+    def is_control(self) -> bool:
+        """True for block-structured control-flow markers."""
+        return self.kind in ("if", "else", "endif", "loop", "endloop")
 
     def replace(self, **changes: Any) -> "MacroEvent":
         data = self.to_dict()
@@ -153,6 +280,8 @@ class MacroEvent:
             offset_y=self.offset_y,
             grayscale=self.grayscale,
             region=self.region,
+            command=self.command,
+            count=self.count,
         )
         base.update(changes)
         return MacroEvent(**base)
@@ -167,6 +296,23 @@ class MacroEvent:
         if self.kind == "image":
             verb = "find" if self.click_button == "none" else "click"
             return f"image {verb} · conf {self.confidence:.2f}"
+        if self.kind == "run":
+            snippet = self.command.splitlines()[0] if self.command else ""
+            return f"run {self.action}: {snippet[:40]}"
+        if self.kind == "pixel":
+            return f"wait pixel {self.command} @ {self.x},{self.y}"
+        if self.kind == "window":
+            return f"wait window ~ {self.command!r}"
+        if self.kind == "if":
+            return "if image found"
+        if self.kind == "else":
+            return "else"
+        if self.kind == "endif":
+            return "end if"
+        if self.kind == "loop":
+            return f"loop ×{self.count}" if self.count else "loop (forever)"
+        if self.kind == "endloop":
+            return "end loop"
         if self.kind == "key":
             return f"key {self.action} {self.key}"
         if self.kind == "wheel":
@@ -197,9 +343,9 @@ class MacroEvent:
             data["jitter_ns"] = self.jitter_ns
         if self.note:
             data["note"] = self.note
-        # v3 image-step fields, likewise only emitted for image events so other
-        # events stay byte-for-byte v1/v2-shaped.
-        if self.kind == "image":
+        # v3 image-step fields, likewise only emitted for image/if events so
+        # other events stay byte-for-byte v1/v2-shaped.
+        if self.kind in ("image", "if"):
             data["image_b64"] = self.image_b64
             data["confidence"] = self.confidence
             data["timeout_ms"] = self.timeout_ms
@@ -213,6 +359,15 @@ class MacroEvent:
                 data["grayscale"] = self.grayscale
             if self.region:
                 data["region"] = list(self.region)
+        # v4 automation/control fields.
+        if self.kind in ("run", "pixel", "window"):
+            data["command"] = self.command
+            data["timeout_ms"] = self.timeout_ms
+            data["on_missing"] = self.on_missing
+            if self.kind == "pixel":
+                data["confidence"] = self.confidence
+        if self.kind == "loop":
+            data["count"] = self.count
         return data
 
     @classmethod
@@ -250,6 +405,8 @@ class MacroEvent:
             offset_y=int(data.get("offset_y", 0)),
             grayscale=bool(data.get("grayscale", True)),
             region=region,  # type: ignore[arg-type]
+            command=str(data.get("command", "")),
+            count=int(data.get("count", 0)),
         )
 
 

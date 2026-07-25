@@ -45,6 +45,20 @@ class SimulationReport:
         return self.duration_ns / 1_000_000_000
 
 
+def _parse_hex_color(text: str) -> tuple[int, int, int] | None:
+    value = text.strip().lstrip("#")
+    if len(value) != 6:
+        return None
+    try:
+        return (int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
+    except ValueError:
+        return None
+
+
+def _colors_close(a: tuple[int, int, int], b: tuple[int, int, int], tolerance: int) -> bool:
+    return all(abs(int(x) - int(y)) <= tolerance for x, y in zip(a, b))
+
+
 def _vision_available() -> bool:
     """True when the optional image-matching deps are importable."""
     try:
@@ -108,6 +122,8 @@ class Player:
     # Called (on the playback thread) when a click-image step fails to find its
     # target, so the host can log it and save a failure screenshot for debugging.
     on_image_missed: Callable[[MacroEvent], None] | None = None
+    # Gate for ``run`` steps (shell/Python). Off unless the host opts in.
+    allow_code_execution: bool = False
     rng: random.Random = field(default_factory=random.Random)
 
     state: PlaybackState = field(default_factory=PlaybackState)
@@ -202,6 +218,8 @@ class Player:
                         self.state.emitted_events += 1
                     elif event.kind == "image" and not dry_run:
                         self._run_image_event(event, locator)
+                    elif event.kind in ("run", "pixel", "window") and not dry_run:
+                        self._run_automation_event(event, locator)
                     if self.on_progress:
                         self.on_progress(index + 1, total)
                     self.state.remaining_ns = max(0, int(duration_ns / speed) - (self.clock_ns() - loop_start_ns))
@@ -223,10 +241,10 @@ class Player:
 
     # -- click-image steps ----------------------------------------------------
     def _make_locator(self, events: list[MacroEvent], dry_run: bool):
-        """Create one Locator for this run if it has image steps and deps allow."""
+        """Create one Locator for this run if it needs the screen and deps allow."""
         if dry_run or self.locator_factory is None:
             return None
-        if not any(event.kind == "image" for event in events):
+        if not any(event.kind in ("image", "pixel", "if") for event in events):
             return None
         try:
             return self.locator_factory()
@@ -253,6 +271,75 @@ class Player:
         if event.on_missing == "fail":
             raise RuntimeError(f"Image not found within {event.timeout_ms} ms")
         # "skip" / "continue": fall through and keep playing.
+
+    # -- run / pixel / window steps -------------------------------------------
+    def _run_automation_event(self, event: MacroEvent, locator) -> None:
+        if event.kind == "run":
+            self._run_command(event)
+            return
+        satisfied = self._wait_condition(event, locator)
+        if not satisfied and event.on_missing == "fail":
+            raise RuntimeError(f"Condition not met within {event.timeout_ms} ms: {event.describe()}")
+
+    def _run_command(self, event: MacroEvent) -> None:
+        if not self.allow_code_execution:
+            if event.on_missing == "fail":
+                raise RuntimeError("Code-execution steps are disabled in Preferences")
+            return
+        timeout_s = max(0.1, event.timeout_ms / 1000) if event.timeout_ms else None
+        try:
+            if event.action == "python":
+                exec(compile(event.command, "<macro>", "exec"), {"__builtins__": __builtins__})  # noqa: S102
+            else:
+                import subprocess
+
+                result = subprocess.run(event.command, shell=True, timeout=timeout_s)  # noqa: S602
+                if result.returncode != 0 and event.on_missing == "fail":
+                    raise RuntimeError(f"Command exited with {result.returncode}")
+        except Exception:
+            if event.on_missing == "fail":
+                raise
+            # skip/continue: swallow the failure and keep playing.
+
+    def _wait_condition(self, event: MacroEvent, locator) -> bool:
+        if event.kind == "pixel":
+            target = _parse_hex_color(event.command)
+            tolerance = int(max(0.0, event.confidence) * 255) or 12
+            if target is None or locator is None:
+                return False
+
+            def check() -> bool:
+                rgb = locator.pixel_rgb(event.x or 0, event.y or 0)
+                return rgb is not None and _colors_close(rgb, target, tolerance)
+
+            return self._wait_until(check, event.timeout_ms)
+        if event.kind == "window":
+            from tinymacro.core.window_info import active_window_title
+
+            needle = event.command.lower()
+
+            def check() -> bool:
+                title = active_window_title()
+                return title is not None and needle in title.lower()
+
+            return self._wait_until(check, event.timeout_ms)
+        return False
+
+    def _wait_until(self, check: Callable[[], bool], timeout_ms: int) -> bool:
+        deadline = self.clock_ns() + max(0, timeout_ms) * 1_000_000
+        while not self._stop_event.is_set():
+            self._wait_while_paused()
+            if self._stop_event.is_set():
+                return False
+            try:
+                if check():
+                    return True
+            except Exception:  # noqa: BLE001
+                pass
+            if self.clock_ns() >= deadline:
+                return False
+            self.sleeper(IMAGE_POLL_S)
+        return False
 
     def _search_image(self, event: MacroEvent, locator, png: bytes):
         deadline = self.clock_ns() + max(0, event.timeout_ms) * 1_000_000

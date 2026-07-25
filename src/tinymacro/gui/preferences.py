@@ -204,11 +204,18 @@ class PreferencesDialog(QDialog):
         self.autosave_seconds.setRange(0, 3600)
         self.autosave_seconds.setSuffix(" s")
         self.autosave_seconds.setValue(s.autosave_seconds)
+        self.allow_code_execution = QCheckBox()
+        self.allow_code_execution.setChecked(s.allow_code_execution)
+        self.allow_code_execution.setToolTip(
+            "Danger: lets 'run command / Python' macro steps execute code on this "
+            "machine. Only enable for macros you fully trust."
+        )
 
         form = QFormLayout()
         form.addRow("Debug mode (detailed errors)", self.debug_mode)
         form.addRow("Write log file", self.log_to_file)
         form.addRow("Autosave interval (0 = off)", self.autosave_seconds)
+        form.addRow("⚠ Allow code-execution steps", self.allow_code_execution)
         return _wrap(form)
 
     # -- commit ---------------------------------------------------------------
@@ -249,6 +256,7 @@ class PreferencesDialog(QDialog):
             s.speed = self.speed.value()
             s.log_to_file = self.log_to_file.isChecked()
             s.autosave_seconds = self.autosave_seconds.value()
+            s.allow_code_execution = self.allow_code_execution.isChecked()
             s.hotkeys = hotkeys
 
             n = s.notifications

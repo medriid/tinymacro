@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 
 from tinymacro.core.events import MacroEvent
 from tinymacro.core.macro import Macro
+from tinymacro.gui.automation_dialog import AutomationDialog
 from tinymacro.gui.event_dialog import EventDialog
 from tinymacro.gui.icons import get_icon
 from tinymacro.gui.image_step_dialog import ImageStepDialog
@@ -92,6 +93,8 @@ class EditorDialog(QDialog):
         self.insert_event_button.setToolTip("Insert a key, mouse, or wheel event by hand")
         self.insert_image_button = QPushButton(get_icon("image", color), "Click-Image")
         self.insert_image_button.setToolTip("Insert a step that finds an image on screen and clicks it")
+        self.insert_auto_button = QPushButton(get_icon("scheduler", color), "Automation…")
+        self.insert_auto_button.setToolTip("Insert a run-command, wait-pixel, or wait-window step")
 
         tools1 = QHBoxLayout()
         for widget in (
@@ -116,6 +119,7 @@ class EditorDialog(QDialog):
         tools2.addWidget(self.insert_wait_button)
         tools2.addWidget(self.insert_event_button)
         tools2.addWidget(self.insert_image_button)
+        tools2.addWidget(self.insert_auto_button)
         tools2.addStretch(1)
 
         buttons = QDialogButtonBox(
@@ -147,6 +151,7 @@ class EditorDialog(QDialog):
         self.insert_wait_button.clicked.connect(self.insert_wait)
         self.insert_event_button.clicked.connect(self.insert_event_step)
         self.insert_image_button.clicked.connect(self.insert_image_step)
+        self.insert_auto_button.clicked.connect(self.insert_automation_step)
         self._populate()
 
     # -- history --------------------------------------------------------------
@@ -216,6 +221,19 @@ class EditorDialog(QDialog):
                 "",
                 offset,
                 note,
+            ]
+        if event.kind in ("run", "pixel", "window", "if", "else", "endif", "loop", "endloop"):
+            # These synthetic steps are best summarised by their description.
+            return [
+                str(source_index),
+                f"{event.timestamp_ns / 1_000_000_000:.6f}",
+                event.kind,
+                event.action,
+                "",
+                "",
+                "" if event.x is None else f"{event.x},{event.y}",
+                "",
+                event.note or event.describe(),
             ]
         return [
             str(source_index),
@@ -350,6 +368,14 @@ class EditorDialog(QDialog):
         indices = self._selected_source_indices()
         at = indices[0] if indices else len(self.macro.sorted_events())
         self._apply(self.macro.insert_image(at, dialog.build_event()))
+
+    def insert_automation_step(self) -> None:
+        dialog = AutomationDialog(parent=self)
+        if not dialog.exec():
+            return
+        indices = self._selected_source_indices()
+        at = indices[0] if indices else len(self.macro.sorted_events())
+        self._apply(self.macro.insert_event(at, dialog.build_event()))
 
     def edit_image_step(self, index: int) -> None:
         event = self.macro.sorted_events()[index]

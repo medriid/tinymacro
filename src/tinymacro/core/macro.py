@@ -10,9 +10,11 @@ from typing import Any, Iterable
 from .events import MacroEvent
 
 # v2 adds optional per-event fields (duration/jitter/note) and macro-level tags.
-# v3 adds the ``image`` (click-image) step. Readers stay backward compatible:
-# v1/v2 files load unchanged, and newer keys are only written when actually used.
-FORMAT_VERSION = 3
+# v3 adds the ``image`` (click-image) step.
+# v4 adds automation/control steps (run, pixel, window, if/else/endif, loop).
+# Readers stay backward compatible: older files load unchanged, and newer keys
+# are only written when actually used.
+FORMAT_VERSION = 4
 NANOSECONDS_PER_SECOND = 1_000_000_000
 
 

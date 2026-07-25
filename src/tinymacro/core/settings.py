@@ -46,6 +46,8 @@ class Settings:
     # Reliability
     autosave_seconds: int = 30
     log_to_file: bool = True
+    # Security: allow "run command / Python" steps to execute. Off by default.
+    allow_code_execution: bool = False
     hotkeys: HotkeySet = field(default_factory=HotkeySet)
     notifications: NotificationSettings = field(default_factory=NotificationSettings)
 
@@ -108,6 +110,7 @@ class Settings:
             "auto_trim_leading": self.auto_trim_leading,
             "autosave_seconds": self.autosave_seconds,
             "log_to_file": self.log_to_file,
+            "allow_code_execution": self.allow_code_execution,
             "hotkeys": self.hotkeys.to_dict(),
             "notifications": self.notifications.to_dict(),
         }
@@ -135,6 +138,7 @@ class Settings:
             auto_trim_leading=bool(data.get("auto_trim_leading", False)),
             autosave_seconds=int(data.get("autosave_seconds", 30)),
             log_to_file=bool(data.get("log_to_file", True)),
+            allow_code_execution=bool(data.get("allow_code_execution", False)),
             hotkeys=HotkeySet.from_dict(data.get("hotkeys", {}) if isinstance(data.get("hotkeys"), dict) else {}),
             notifications=_load_notifications(data),
         )

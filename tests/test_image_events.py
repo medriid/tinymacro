@@ -40,8 +40,8 @@ def test_non_image_events_stay_lean():
 
 
 def test_older_macro_files_load_under_v3():
-    assert FORMAT_VERSION == 3
-    for version in (1, 2):
+    assert FORMAT_VERSION == 4
+    for version in (1, 2, 3):
         data = {
             "format": "tiny-macro",
             "version": version,

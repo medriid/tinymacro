@@ -65,9 +65,9 @@ def test_tags_and_description_round_trip():
     assert restored.description == "demo"
 
 
-def test_format_version_is_three_and_older_files_load():
-    assert FORMAT_VERSION == 3
-    for version in (1, 2):
+def test_format_version_is_four_and_older_files_load():
+    assert FORMAT_VERSION == 4
+    for version in (1, 2, 3):
         older = {
             "format": "tiny-macro",
             "version": version,

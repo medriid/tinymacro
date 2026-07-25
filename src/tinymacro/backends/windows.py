@@ -329,6 +329,17 @@ class WindowsBackend(InputBackend):
         self.user32.GetCursorPos.restype = wintypes.BOOL
         self.user32.GetSystemMetrics.argtypes = [ctypes.c_int]
         self.user32.GetSystemMetrics.restype = ctypes.c_int
+        self.user32.GetForegroundWindow.restype = wintypes.HWND
+        self.user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        self.user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        self.user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        self.user32.SetForegroundWindow.restype = wintypes.BOOL
+        self.user32.BringWindowToTop.argtypes = [wintypes.HWND]
+        self.user32.BringWindowToTop.restype = wintypes.BOOL
+        self.user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+        self.user32.AttachThreadInput.restype = wintypes.BOOL
+        self.user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        self.user32.ShowWindow.restype = wintypes.BOOL
         self.kernel32.GetCurrentThreadId.restype = wintypes.DWORD
         self.kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
         self.kernel32.GetModuleHandleW.restype = wintypes.HMODULE
@@ -351,6 +362,38 @@ class WindowsBackend(InputBackend):
         if not self.user32.GetCursorPos(ctypes.byref(point)):
             return None
         return int(point.x), int(point.y)
+
+    def foreground_window_if_external(self) -> int:
+        hwnd = self.user32.GetForegroundWindow()
+        if not hwnd:
+            return 0
+        pid = wintypes.DWORD(0)
+        self.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value == os.getpid():
+            return 0  # one of our own windows
+        return int(hwnd)
+
+    def focus_window(self, handle: int) -> bool:
+        """Force keyboard focus to ``handle`` so key playback lands there.
+
+        Uses the AttachThreadInput trick to get around SetForegroundWindow's
+        focus-stealing restrictions.
+        """
+        if not handle:
+            return False
+        hwnd = wintypes.HWND(handle)
+        target_thread = self.user32.GetWindowThreadProcessId(hwnd, None)
+        current_thread = self.kernel32.GetCurrentThreadId()
+        attached = False
+        try:
+            if target_thread and target_thread != current_thread:
+                attached = bool(self.user32.AttachThreadInput(current_thread, target_thread, True))
+            self.user32.ShowWindow(hwnd, 5)  # SW_SHOW (no-op if already visible)
+            self.user32.BringWindowToTop(hwnd)
+            return bool(self.user32.SetForegroundWindow(hwnd))
+        finally:
+            if attached:
+                self.user32.AttachThreadInput(current_thread, target_thread, False)
 
     def _stop_hook_thread(self) -> None:
         with self._lock:
