@@ -25,7 +25,6 @@ from PyQt6.QtWidgets import (
     QStatusBar,
     QSystemTrayIcon,
     QToolBar,
-    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -37,16 +36,19 @@ from tinymacro.core.logging_setup import get_logger
 from tinymacro.core.macro import Macro
 from tinymacro.core.player import Player, simulate
 from tinymacro.core.recorder import Recorder
-from tinymacro.core.scheduler import ScheduleStore
+from tinymacro.core.image_watcher import ImageWatcher
+from tinymacro.core.scheduler import Schedule, ScheduleStore
 from tinymacro.core.settings import Settings
+from tinymacro.core.vision import CAPTURE_AVAILABLE, Locator
 from tinymacro.desktop import install_file_association
 from tinymacro.export import export_runner
 from tinymacro.gui.editor import EditorDialog
+from tinymacro.gui.icons import app_icon, get_icon
 from tinymacro.gui.library_dialog import LibraryDialog
 from tinymacro.gui.log_dialog import LogDialog
 from tinymacro.gui.preferences import PreferencesDialog
 from tinymacro.gui.scheduler_dialog import SchedulerDialog
-from tinymacro.gui.theme import apply_theme
+from tinymacro.gui.theme import apply_theme, theme_manager
 from tinymacro.gui.toast import ToastManager
 from tinymacro.gui.widgets import RecordingIndicator
 from tinymacro.notifications.base import LoopEvent, NotificationDispatcher
@@ -62,6 +64,7 @@ class PlaybackSignalBridge(QObject):
     hotkeys_pressed = pyqtSignal(object)
     debug_error = pyqtSignal(str, str)
     progress = pyqtSignal(int, int)
+    image_trigger = pyqtSignal(object)  # fired by the ImageWatcher thread
 
 
 class MainWindow(QMainWindow):
@@ -93,12 +96,17 @@ class MainWindow(QMainWindow):
             move_min_interval_ns=settings.move_min_interval_ms * 1_000_000,
         )
         self.player = Player(backend)
+        # Enables click-image steps during playback; the factory runs on the
+        # player's own thread (mss is not thread-safe). Missing deps → None,
+        # so image steps fall back to their on_missing rule.
+        self.player.locator_factory = (lambda: Locator()) if CAPTURE_AVAILABLE else None
         self.bridge = PlaybackSignalBridge(self)
         self.bridge.loop_completed.connect(self._handle_loop_completed)
         self.bridge.notify_error.connect(lambda message: self._toast(message, "error"))
         self.bridge.hotkeys_pressed.connect(self._activate_hotkeys)
         self.bridge.debug_error.connect(self._handle_debug_error)
         self.bridge.progress.connect(self._on_progress)
+        self.bridge.image_trigger.connect(self._on_image_trigger)
         self.player.on_loop_complete = self._emit_loop_completed
         self.player.on_error = self._emit_playback_error
         self.player.on_progress = lambda i, t: self.bridge.progress.emit(i, t)
@@ -113,8 +121,21 @@ class MainWindow(QMainWindow):
         self.dirty = False
         self._last_feed_count = 0
         self._step_index = 0
+        # Icon-bearing widgets, so a theme change can re-tint them all at once.
+        self._icon_actions: dict[QAction, str] = {}
+
+        # Image-trigger scheduler: a background watcher fires macros when their
+        # target image appears. The watcher runs only when there are usable
+        # image triggers and the vision deps are present.
+        self._image_watcher = ImageWatcher(
+            provider=lambda: self.schedules.schedules,
+            locator_factory=lambda: Locator(),
+            on_match=lambda schedule: self.bridge.image_trigger.emit(schedule),
+        )
+        self._active_image_schedule: Schedule | None = None
 
         self.setWindowTitle("Tiny Macro")
+        self.setWindowIcon(app_icon())
         self.setMinimumWidth(480)
         self.toasts = ToastManager(self, animated=settings.animations)
 
@@ -125,6 +146,7 @@ class MainWindow(QMainWindow):
         self._apply_window_flags()
         self._apply_mode()
         self._start_hotkeys()
+        theme_manager.changed.connect(self._on_theme_changed)
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -135,12 +157,39 @@ class MainWindow(QMainWindow):
         self._schedule_timer = QTimer(self)
         self._schedule_timer.timeout.connect(self._check_schedules)
         self._schedule_timer.start(30_000)
+        self._refresh_image_watcher()
 
         self._offer_recovery()
         if initial_macro:
             self.load_macro(initial_macro)
         self.log.info("Tiny Macro started (backend=%s)", self.backend.name)
         self._update_state()
+
+    # -- icons ----------------------------------------------------------------
+    def _icon_color(self) -> str:
+        # Mid-gray reads acceptably on either theme when colors aren't set yet
+        # (e.g. headless tests); the theme signal re-tints once real colors land.
+        return getattr(self.colors, "text", None) or "#888888"
+
+    def _action(self, icon_name: str, tooltip: str, checkable: bool = False) -> QAction:
+        action = QAction(get_icon(icon_name, self._icon_color()), "", self)
+        action.setToolTip(tooltip)
+        action.setCheckable(checkable)
+        self._icon_actions[action] = icon_name
+        return action
+
+    def _menu_action(self, menu, icon_name: str, text: str, slot) -> QAction:
+        action = menu.addAction(get_icon(icon_name, self._icon_color()), text, slot)
+        self._icon_actions[action] = icon_name
+        return action
+
+    def _on_theme_changed(self, colors) -> None:
+        self.colors = colors
+        color = self._icon_color()
+        for action, icon_name in self._icon_actions.items():
+            action.setIcon(get_icon(icon_name, color))
+        expanded = not self.settings.compact_mode
+        self.expand_button.setIcon(get_icon("chevron_up" if expanded else "chevron_down", color))
 
     # -- construction ---------------------------------------------------------
     def _build_central(self) -> None:
@@ -164,7 +213,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.feed_label)
         layout.addWidget(self.feed, 1)
 
-        self.expand_button = QPushButton("Expand ▾")
+        self.expand_button = QPushButton("Expand")
         self.expand_button.clicked.connect(self.toggle_mode)
         layout.addWidget(self.expand_button)
 
@@ -176,23 +225,22 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("Controls")
         toolbar.setMovable(False)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
-        style = self.style()
 
         self.indicator = RecordingIndicator(animated=self.settings.animations)
         toolbar.addWidget(self.indicator)
         toolbar.addSeparator()
 
-        self.open_action = _action(style, QStyle.StandardPixmap.SP_DialogOpenButton, "Open", self)
-        self.save_action = _action(style, QStyle.StandardPixmap.SP_DialogSaveButton, "Save", self)
-        self.record_action = _action(style, QStyle.StandardPixmap.SP_DialogApplyButton, "Record", self, checkable=True)
-        self.play_action = _action(style, QStyle.StandardPixmap.SP_MediaPlay, "Play", self)
-        self.pause_action = _action(style, QStyle.StandardPixmap.SP_MediaPause, "Pause/Resume", self)
-        self.stop_action = _action(style, QStyle.StandardPixmap.SP_MediaStop, "Stop", self)
-        self.step_action = _action(style, QStyle.StandardPixmap.SP_MediaSeekForward, "Step one event", self)
-        self.editor_action = _action(style, QStyle.StandardPixmap.SP_FileDialogDetailedView, "Editor", self)
-        self.library_action = _action(style, QStyle.StandardPixmap.SP_DirIcon, "Library", self)
-        self.pref_action = _action(style, QStyle.StandardPixmap.SP_FileDialogInfoView, "Preferences", self)
-        self.top_action = _action(style, QStyle.StandardPixmap.SP_TitleBarShadeButton, "Always on top", self, checkable=True)
+        self.open_action = self._action("open", "Open")
+        self.save_action = self._action("save", "Save")
+        self.record_action = self._action("record", "Record", checkable=True)
+        self.play_action = self._action("play", "Play")
+        self.pause_action = self._action("pause", "Pause/Resume")
+        self.stop_action = self._action("stop", "Stop")
+        self.step_action = self._action("step", "Step one event")
+        self.editor_action = self._action("editor", "Editor")
+        self.library_action = self._action("library", "Library")
+        self.pref_action = self._action("preferences", "Preferences")
+        self.top_action = self._action("pin", "Always on top", checkable=True)
         self.top_action.setChecked(self.settings.always_on_top)
 
         for action in (self.open_action, self.save_action, self.record_action,
@@ -232,41 +280,40 @@ class MainWindow(QMainWindow):
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("File")
-        file_menu.addAction("Open", self.open_macro)
-        file_menu.addAction("Save", self.save_macro)
-        file_menu.addAction("Save As", self.save_macro_as)
-        file_menu.addAction("Export Runner", self.export_macro_runner)
-        file_menu.addAction("Install File Association", self.install_association)
+        self._menu_action(file_menu, "open", "Open", self.open_macro)
+        self._menu_action(file_menu, "save", "Save", self.save_macro)
+        self._menu_action(file_menu, "save", "Save As", self.save_macro_as)
+        self._menu_action(file_menu, "add_file", "Export Runner", self.export_macro_runner)
+        self._menu_action(file_menu, "pin", "Install File Association", self.install_association)
         file_menu.addSeparator()
-        file_menu.addAction("Quit", self.close)
+        self._menu_action(file_menu, "close", "Quit", self.close)
 
         edit_menu = self.menuBar().addMenu("Edit")
-        edit_menu.addAction("Macro Editor", self.open_editor)
-        edit_menu.addAction("Preferences", self.open_preferences)
+        self._menu_action(edit_menu, "editor", "Macro Editor", self.open_editor)
+        self._menu_action(edit_menu, "preferences", "Preferences", self.open_preferences)
 
         tools_menu = self.menuBar().addMenu("Tools")
-        tools_menu.addAction("Macro Library", self.open_library)
-        tools_menu.addAction("Scheduler", self.open_scheduler)
-        tools_menu.addAction("Validate (dry run)", self.validate_macro)
-        tools_menu.addAction("Log Viewer", self.open_logs)
+        self._menu_action(tools_menu, "library", "Macro Library", self.open_library)
+        self._menu_action(tools_menu, "scheduler", "Scheduler", self.open_scheduler)
+        self._menu_action(tools_menu, "validate", "Validate (dry run)", self.validate_macro)
+        self._menu_action(tools_menu, "logs", "Log Viewer", self.open_logs)
 
         view_menu = self.menuBar().addMenu("View")
-        view_menu.addAction("Toggle compact / expanded", self.toggle_mode)
+        self._menu_action(view_menu, "chevron_down", "Toggle compact / expanded", self.toggle_mode)
 
     def _build_tray(self) -> None:
         self.tray: QSystemTrayIcon | None = None
         if not self.settings.tray_enabled or not QSystemTrayIcon.isSystemTrayAvailable():
             return
-        icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
-        self.tray = QSystemTrayIcon(icon, self)
+        self.tray = QSystemTrayIcon(app_icon(), self)
         self.tray.setToolTip("Tiny Macro")
         menu = QMenu()
-        menu.addAction("Show / Hide", self._toggle_visible)
-        menu.addAction("Record", self.toggle_recording)
-        menu.addAction("Play", self.toggle_playback)
-        menu.addAction("Stop", self.stop_all)
+        self._menu_action(menu, "pin", "Show / Hide", self._toggle_visible)
+        self._menu_action(menu, "record", "Record", self.toggle_recording)
+        self._menu_action(menu, "play", "Play", self.toggle_playback)
+        self._menu_action(menu, "stop", "Stop", self.stop_all)
         menu.addSeparator()
-        menu.addAction("Quit", self.close)
+        self._menu_action(menu, "close", "Quit", self.close)
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
@@ -278,7 +325,8 @@ class MainWindow(QMainWindow):
         self.progress.setVisible(expanded)
         self.feed_label.setVisible(expanded)
         self.feed.setVisible(expanded)
-        self.expand_button.setText("Collapse ▴" if expanded else "Expand ▾")
+        self.expand_button.setText("Collapse" if expanded else "Expand")
+        self.expand_button.setIcon(get_icon("chevron_up" if expanded else "chevron_down", self._icon_color()))
         self.step_action.setVisible(expanded)
         if expanded:
             self.setMinimumHeight(0)
@@ -488,6 +536,8 @@ class MainWindow(QMainWindow):
 
     def open_scheduler(self) -> None:
         SchedulerDialog(self.schedules, self).exec()
+        # Triggers may have been added/removed/toggled.
+        self._refresh_image_watcher()
 
     def open_logs(self) -> None:
         LogDialog(self).exec()
@@ -726,8 +776,54 @@ class MainWindow(QMainWindow):
             self._toast(f"Scheduled run: {schedule.display_name}", "info")
             break
 
+    # -- image-trigger scheduling ---------------------------------------------
+    def _refresh_image_watcher(self) -> None:
+        """Start or stop the watcher based on whether it has work to do."""
+        has_work = CAPTURE_AVAILABLE and any(
+            s.is_image and s.can_fire() for s in self.schedules.schedules
+        )
+        if has_work and not self._image_watcher.is_running():
+            self._image_watcher.start()
+            self.log.info("Image-trigger watcher started")
+        elif not has_work and self._image_watcher.is_running():
+            self._image_watcher.stop()
+            self.log.info("Image-trigger watcher stopped")
+
+    def _on_image_trigger(self, schedule: Schedule) -> None:
+        """A target image was seen (on the GUI thread via the bridge signal)."""
+        # Something else is running: don't fire now; allow a fresh detection.
+        if self.player.state.playing or self.recorder.recording:
+            self._image_watcher.rearm(schedule, seen=False)
+            return
+        try:
+            macro = Macro.load(schedule.macro_path)
+        except Exception as exc:  # noqa: BLE001
+            self.log.warning("Image-trigger macro failed to load: %s", exc)
+            self._image_watcher.rearm(schedule, seen=False)
+            return
+        schedule.mark_image_fired()
+        self.schedules.save()
+        self._active_image_schedule = schedule
+        self.player.start(macro, loop_count=1, speed=schedule.speed)
+        self.log.info("Image trigger fired: %s", schedule.display_name)
+        self._toast(f"Image trigger: {schedule.display_name}", "info")
+
+    def _finish_image_trigger_if_done(self) -> None:
+        """Re-arm the active image trigger once its macro stops playing."""
+        schedule = self._active_image_schedule
+        if schedule is None or self.player.state.playing:
+            return
+        self._active_image_schedule = None
+        # seen=True: the image was present when it fired, so it must disappear and
+        # reappear before firing again (counts distinct sightings, never loops).
+        self._image_watcher.rearm(schedule, seen=True)
+        if not schedule.can_fire():
+            self.log.info("Image trigger %s reached its fire limit", schedule.display_name)
+            self._refresh_image_watcher()
+
     def _tick(self) -> None:
         self._update_state()
+        self._finish_image_trigger_if_done()
         if self.recorder.recording and self.settings.compact_mode is False:
             self._update_feed()
 
@@ -798,6 +894,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self.player.stop(wait=True)
+        self._image_watcher.stop()
         self.backend.close()
         if self.tray:
             self.tray.hide()
@@ -812,8 +909,3 @@ class MainWindow(QMainWindow):
         return answer == QMessageBox.StandardButton.Yes
 
 
-def _action(style, pixmap, tooltip, parent, checkable: bool = False) -> QAction:
-    action = QAction(style.standardIcon(pixmap), "", parent)
-    action.setToolTip(tooltip)
-    action.setCheckable(checkable)
-    return action

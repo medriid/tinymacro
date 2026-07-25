@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QObject, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtWidgets import QApplication
 
@@ -44,6 +44,32 @@ class ThemeColors:
         return {"key": base, "mouse": base, "wheel": base, "wait": base}
 
 
+class _ThemeManager(QObject):
+    """Broadcasts the resolved colors whenever the theme is (re)applied.
+
+    Widgets that draw themselves (e.g. the recording indicator, toasts, tinted
+    icons) can't rely on the app stylesheet alone, so they subscribe here and
+    refresh their own colors on `changed`.
+    """
+
+    changed = pyqtSignal(object)
+
+
+theme_manager = _ThemeManager()
+
+_current_colors: ThemeColors | None = None
+
+
+def current_colors() -> ThemeColors | None:
+    """The colors from the most recent :func:`apply_theme`, or None if unset."""
+    return _current_colors
+
+
+def icon_color() -> str:
+    """A sensible single-color tint for icons given the active theme."""
+    return _current_colors.text if _current_colors else "#888888"
+
+
 def system_prefers_dark(app: QApplication) -> bool:
     color = app.palette().color(QPalette.ColorRole.Window)
     return color.lightness() < 128
@@ -80,8 +106,10 @@ def _coerce(settings_or_theme) -> tuple[str, str, str]:
 
 
 def apply_theme(app: QApplication, settings_or_theme) -> ThemeColors:
+    global _current_colors
     theme, preset, accent = _coerce(settings_or_theme)
     c = resolve_colors(app, theme, preset, accent)
+    _current_colors = c
     palette = QPalette()
     palette.setColor(QPalette.ColorRole.Window, QColor(c.bg))
     palette.setColor(QPalette.ColorRole.WindowText, QColor(c.text))
@@ -98,6 +126,7 @@ def apply_theme(app: QApplication, settings_or_theme) -> ThemeColors:
     app.setPalette(palette)
     app.setStyleSheet(_stylesheet(c))
     app.setAttribute(Qt.ApplicationAttribute.AA_DontShowIconsInMenus, False)
+    theme_manager.changed.emit(c)
     return c
 
 

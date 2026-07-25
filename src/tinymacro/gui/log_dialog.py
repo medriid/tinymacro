@@ -9,6 +9,8 @@ from PyQt6.QtWidgets import (
 )
 
 from tinymacro.core.logging_setup import ring_buffer
+from tinymacro.gui.icons import get_icon
+from tinymacro.gui.theme import icon_color
 
 
 class LogDialog(QDialog):
@@ -23,9 +25,10 @@ class LogDialog(QDialog):
         self.view.setReadOnly(True)
         self.view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
 
-        refresh = QPushButton("Refresh")
-        clear = QPushButton("Clear")
-        close = QPushButton("Close")
+        color = icon_color()
+        refresh = QPushButton(get_icon("refresh", color), "Refresh")
+        clear = QPushButton(get_icon("clear", color), "Clear")
+        close = QPushButton(get_icon("close", color), "Close")
         refresh.clicked.connect(self.refresh)
         clear.clicked.connect(self._clear)
         close.clicked.connect(self.accept)

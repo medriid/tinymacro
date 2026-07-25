@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable
 from dataclasses import dataclass, field
 import random
 import threading
 import time
+from typing import TYPE_CHECKING
 
 from tinymacro.backends.base import InputBackend
-from tinymacro.core.events import MacroEvent
+from tinymacro.core.events import DEFAULT_CONFIDENCE, MacroEvent
 from tinymacro.core.macro import Macro
+
+if TYPE_CHECKING:
+    from tinymacro.core.vision import Locator
+
+# How often to re-scan the screen while waiting for a click-image target.
+IMAGE_POLL_S = 0.15
 
 
 @dataclass(slots=True)
@@ -37,6 +45,16 @@ class SimulationReport:
         return self.duration_ns / 1_000_000_000
 
 
+def _vision_available() -> bool:
+    """True when the optional image-matching deps are importable."""
+    try:
+        from tinymacro.core.vision import VISION_AVAILABLE
+
+        return VISION_AVAILABLE
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def simulate(macro: Macro) -> SimulationReport:
     """Dry-run a macro: check structural sanity and report, emitting nothing."""
     events = macro.sorted_events()
@@ -52,6 +70,13 @@ def simulate(macro: Macro) -> SimulationReport:
             warnings.append(f"event {index} is a mouse click with no button")
         if event.kind == "key" and event.action in {"press", "release"} and not event.key:
             warnings.append(f"event {index} is a key event with no key")
+        if event.kind == "image":
+            if not event.image_b64:
+                warnings.append(f"event {index} is a click-image step with no image")
+            if not _vision_available():
+                warnings.append(
+                    f"event {index} is a click-image step but the 'vision' extras are not installed"
+                )
     return SimulationReport(
         ok=not warnings,
         event_count=len(events),
@@ -70,6 +95,10 @@ class Player:
     on_loop_complete: Callable[[int, int, float, Macro], None] | None = None
     on_error: Callable[[Exception], None] | None = None
     on_progress: Callable[[int, int], None] | None = None
+    # Builds a screen Locator for click-image steps. Called on the playback
+    # thread (mss is not thread-safe), once per run, and closed at the end. When
+    # None (or vision deps missing) image steps fall back to their on_missing rule.
+    locator_factory: Callable[[], "Locator"] | None = None
     rng: random.Random = field(default_factory=random.Random)
 
     state: PlaybackState = field(default_factory=PlaybackState)
@@ -140,6 +169,7 @@ class Player:
         duration_ns = max(1, macro.duration_ns)
         loops_done = 0
         total = len(events)
+        locator = self._make_locator(events, dry_run)
         try:
             while not self._stop_event.is_set() and (loop_count == 0 or loops_done < loop_count):
                 self.state.loop_index = loops_done + 1
@@ -161,6 +191,8 @@ class Player:
                     if event.is_input and not dry_run:
                         self.backend.emit(event)
                         self.state.emitted_events += 1
+                    elif event.kind == "image" and not dry_run:
+                        self._run_image_event(event, locator)
                     if self.on_progress:
                         self.on_progress(index + 1, total)
                     self.state.remaining_ns = max(0, int(duration_ns / speed) - (self.clock_ns() - loop_start_ns))
@@ -175,8 +207,65 @@ class Player:
             else:
                 raise
         finally:
+            if locator is not None:
+                locator.close()
             self.state.playing = False
             self.state.paused = False
+
+    # -- click-image steps ----------------------------------------------------
+    def _make_locator(self, events: list[MacroEvent], dry_run: bool):
+        """Create one Locator for this run if it has image steps and deps allow."""
+        if dry_run or self.locator_factory is None:
+            return None
+        if not any(event.kind == "image" for event in events):
+            return None
+        try:
+            return self.locator_factory()
+        except Exception:  # noqa: BLE001 - vision unavailable → degrade gracefully
+            return None
+
+    def _run_image_event(self, event: MacroEvent, locator) -> None:
+        try:
+            png = base64.b64decode(event.image_b64) if event.image_b64 else b""
+        except Exception:  # noqa: BLE001 - corrupt data is treated as "not found"
+            png = b""
+        match = self._search_image(event, locator, png) if (png and locator is not None) else None
+        if match is not None:
+            if event.click_button and event.click_button != "none":
+                self._emit_click(match.x + event.offset_x, match.y + event.offset_y, event.click_button)
+            return
+        # Not found (or unable to search): honor the on_missing policy.
+        if event.on_missing == "fail":
+            raise RuntimeError(f"Image not found within {event.timeout_ms} ms")
+        # "skip" / "continue": fall through and keep playing.
+
+    def _search_image(self, event: MacroEvent, locator, png: bytes):
+        deadline = self.clock_ns() + max(0, event.timeout_ms) * 1_000_000
+        confidence = event.confidence or DEFAULT_CONFIDENCE
+        while not self._stop_event.is_set():
+            self._wait_while_paused()
+            if self._stop_event.is_set():
+                return None
+            try:
+                match = locator.locate(png, confidence, event.region, event.grayscale)
+            except Exception:  # noqa: BLE001 - a failed capture is just a miss
+                match = None
+            if match is not None:
+                return match
+            if self.clock_ns() >= deadline:
+                return None
+            self.sleeper(IMAGE_POLL_S)
+        return None
+
+    def _emit_click(self, x: int, y: int, button: str) -> None:
+        x, y = int(x), int(y)
+        for synthetic in (
+            MacroEvent(timestamp_ns=0, kind="mouse", action="move", x=x, y=y),
+            MacroEvent(timestamp_ns=0, kind="mouse", action="press", button=button, x=x, y=y),
+            MacroEvent(timestamp_ns=0, kind="mouse", action="release", button=button, x=x, y=y),
+        ):
+            self.backend.emit(synthetic)
+            self.state.emitted_events += 1
 
     def _wait_while_paused(self) -> None:
         while self._pause_event.is_set() and not self._stop_event.is_set():

@@ -35,7 +35,26 @@ def test_editor_filter_reduces_rows(qtbot):
     dialog = EditorDialog(_macro())
     qtbot.addWidget(dialog)
     dialog.search.setText("mouse")
-    assert dialog.table.rowCount() == 1
+    assert dialog.tree.topLevelItemCount() == 1
+
+
+def test_editor_groups_consecutive_moves(qtbot):
+    events = [
+        MacroEvent(0, "mouse", "press", button="left", x=0, y=0),
+        MacroEvent(1, "mouse", "move", x=1, y=1),
+        MacroEvent(2, "mouse", "move", x=2, y=2),
+        MacroEvent(3, "mouse", "move", x=3, y=3),
+        MacroEvent(4, "key", "press", key="a"),
+    ]
+    dialog = EditorDialog(Macro(events=events))
+    qtbot.addWidget(dialog)
+    # press + movement-group + key press = 3 top-level rows; the group holds 3 moves.
+    assert dialog.tree.topLevelItemCount() == 3
+    group = dialog.tree.topLevelItem(1)
+    assert group.childCount() == 3
+    # Selecting the group resolves to all three movement source indices.
+    group.setSelected(True)
+    assert dialog._selected_source_indices() == [1, 2, 3]
 
 
 def test_preferences_tabs_present(qtbot):

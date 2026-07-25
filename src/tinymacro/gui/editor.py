@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor
+import base64
+
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QIcon, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -12,14 +14,17 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSpinBox,
-    QTableWidget,
-    QTableWidgetItem,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from tinymacro.core.events import MacroEvent
 from tinymacro.core.macro import Macro
+from tinymacro.gui.icons import get_icon
+from tinymacro.gui.image_step_dialog import ImageStepDialog
+from tinymacro.gui.theme import icon_color
 
 
 class EditorDialog(QDialog):
@@ -40,29 +45,32 @@ class EditorDialog(QDialog):
         self.search.setPlaceholderText("Filter events (kind, key, button, note)…")
         self.search.textChanged.connect(self._on_filter)
 
-        self.table = QTableWidget(0, 9)
-        self.table.setHorizontalHeaderLabels(
-            ["#", "Time (s)", "Kind", "Action", "Key", "Button", "X/Y", "Delta", "Note"]
-        )
-        self.table.setAlternatingRowColors(True)
-        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.doubleClicked.connect(lambda *_: self.edit_note())
+        self._columns = ["#", "Time (s)", "Kind", "Action", "Key", "Button", "X/Y", "Delta", "Note"]
+        self.tree = QTreeWidget()
+        self.tree.setColumnCount(len(self._columns))
+        self.tree.setHeaderLabels(self._columns)
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
+        self.tree.setUniformRowHeights(True)
+        self.tree.setExpandsOnDoubleClick(False)
+        self.tree.itemDoubleClicked.connect(self._on_double_click)
+        self.tree.setIconSize(QSize(40, 26))
 
         # Row 1 of tools: structural edits.
-        self.undo_button = QPushButton("Undo")
-        self.redo_button = QPushButton("Redo")
-        self.delete_button = QPushButton("Delete")
-        self.trim_idle_button = QPushButton("Trim Idle")
-        self.keep_selected_button = QPushButton("Keep Range")
-        self.note_button = QPushButton("Edit Note…")
+        color = icon_color()
+        self.undo_button = QPushButton(get_icon("undo", color), "Undo")
+        self.redo_button = QPushButton(get_icon("redo", color), "Redo")
+        self.delete_button = QPushButton(get_icon("trash", color), "Delete")
+        self.trim_idle_button = QPushButton(get_icon("trim", color), "Trim Idle")
+        self.keep_selected_button = QPushButton(get_icon("scale", color), "Keep Range")
+        self.note_button = QPushButton(get_icon("note", color), "Edit Note…")
 
         # Row 2 of tools: timing + inserts.
         self.scale = QDoubleSpinBox()
         self.scale.setRange(0.01, 100.0)
         self.scale.setValue(1.0)
         self.scale.setSingleStep(0.1)
-        self.scale_button = QPushButton("Scale Timing")
+        self.scale_button = QPushButton(get_icon("scale", color), "Scale Timing")
         self.wait_ms = QSpinBox()
         self.wait_ms.setRange(1, 3_600_000)
         self.wait_ms.setValue(500)
@@ -72,7 +80,9 @@ class EditorDialog(QDialog):
         self.wait_jitter.setValue(0)
         self.wait_jitter.setPrefix("± ")
         self.wait_jitter.setSuffix(" ms")
-        self.insert_wait_button = QPushButton("Insert Wait")
+        self.insert_wait_button = QPushButton(get_icon("wait", color), "Insert Wait")
+        self.insert_image_button = QPushButton(get_icon("image", color), "Click-Image")
+        self.insert_image_button.setToolTip("Insert a step that finds an image on screen and clicks it")
 
         tools1 = QHBoxLayout()
         for widget in (
@@ -95,6 +105,7 @@ class EditorDialog(QDialog):
         tools2.addWidget(self.wait_ms)
         tools2.addWidget(self.wait_jitter)
         tools2.addWidget(self.insert_wait_button)
+        tools2.addWidget(self.insert_image_button)
         tools2.addStretch(1)
 
         buttons = QDialogButtonBox(
@@ -112,7 +123,7 @@ class EditorDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(self.info)
         layout.addWidget(self.search)
-        layout.addWidget(self.table, 1)
+        layout.addWidget(self.tree, 1)
         layout.addWidget(tools_wrap)
         layout.addWidget(buttons)
 
@@ -124,6 +135,7 @@ class EditorDialog(QDialog):
         self.note_button.clicked.connect(self.edit_note)
         self.scale_button.clicked.connect(self.scale_timing)
         self.insert_wait_button.clicked.connect(self.insert_wait)
+        self.insert_image_button.clicked.connect(self.insert_image_step)
         self._populate()
 
     # -- history --------------------------------------------------------------
@@ -163,44 +175,128 @@ class EditorDialog(QDialog):
         return self._filter in haystack
 
     def _selected_source_indices(self) -> list[int]:
-        rows = sorted(index.row() for index in self.table.selectionModel().selectedRows())
-        return [self.table.item(row, 0).data(Qt.ItemDataRole.UserRole) for row in rows]
+        indices: set[int] = set()
+        for item in self.tree.selectedItems():
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if isinstance(data, list):
+                indices.update(data)  # a movement group carries all its children
+            elif data is not None:
+                indices.add(data)
+        return sorted(indices)
+
+    @staticmethod
+    def _is_move(event: MacroEvent) -> bool:
+        return event.kind == "mouse" and event.action == "move"
+
+    def _row_values(self, source_index: int, event: MacroEvent) -> list[str]:
+        xy = "" if event.x is None or event.y is None else f"{event.x},{event.y}"
+        delta = "" if not event.dx and not event.dy else f"{event.dx},{event.dy}"
+        if event.kind == "image":
+            # Surface the image step's key settings in the existing columns.
+            offset = "" if not event.offset_x and not event.offset_y else f"+{event.offset_x},{event.offset_y}"
+            note = event.note or f"conf {event.confidence:.2f} · {event.on_missing}"
+            return [
+                str(source_index),
+                f"{event.timestamp_ns / 1_000_000_000:.6f}",
+                "image",
+                event.click_button if event.click_button == "none" else f"click {event.click_button}",
+                "",
+                "",
+                "",
+                offset,
+                note,
+            ]
+        return [
+            str(source_index),
+            f"{event.timestamp_ns / 1_000_000_000:.6f}",
+            event.kind,
+            event.action,
+            event.key or "",
+            event.button or "",
+            xy,
+            delta,
+            event.note,
+        ]
+
+    def _make_item(self, values: list[str], tint: str | None = None) -> QTreeWidgetItem:
+        item = QTreeWidgetItem(values)
+        for col in range(len(values)):
+            item.setTextAlignment(col, Qt.AlignmentFlag.AlignCenter)
+        if tint:
+            color = QColor(tint)
+            color.setAlpha(60)
+            item.setBackground(2, color)
+        return item
 
     def _populate(self) -> None:
         events = self.macro.sorted_events()
+        image_count = self.macro.image_event_count()
+        image_note = f", {image_count} image" if image_count else ""
         self.info.setText(
             f"{self.macro.name} | {len(events)} events "
-            f"({self.macro.input_event_count()} input, {self.macro.wait_event_count()} wait) | "
+            f"({self.macro.input_event_count()} input, {self.macro.wait_event_count()} wait{image_note}) | "
             f"{self.macro.duration_s:.3f}s | {self.macro.backend}"
         )
-        visible = [(idx, event) for idx, event in enumerate(events) if self._row_matches(event)]
-        self.table.setRowCount(len(visible))
-        for row, (source_index, event) in enumerate(visible):
-            xy = "" if event.x is None or event.y is None else f"{event.x},{event.y}"
-            delta = "" if not event.dx and not event.dy else f"{event.dx},{event.dy}"
-            values = [
-                str(source_index),
-                f"{event.timestamp_ns / 1_000_000_000:.6f}",
-                event.kind,
-                event.action,
-                event.key or "",
-                event.button or "",
-                xy,
-                delta,
-                event.note,
-            ]
+        self.tree.clear()
+        move_tint = self._kind_colors.get("mouse")
+        # While a filter is active, grouping is suppressed so matches stay flat
+        # and predictable; otherwise consecutive moves collapse into one node.
+        filtering = bool(self._filter)
+        group_no = 0
+        i = 0
+        n = len(events)
+        while i < n:
+            source_index = i
+            event = events[i]
+            if not filtering and self._is_move(event):
+                # Gather the maximal run of consecutive movements.
+                run = []
+                j = i
+                while j < n and self._is_move(events[j]):
+                    run.append(j)
+                    j += 1
+                if len(run) >= 2:
+                    group_no += 1
+                    start = events[run[0]].timestamp_ns / 1_000_000_000
+                    end = events[run[-1]].timestamp_ns / 1_000_000_000
+                    parent = self._make_item(
+                        [
+                            f"{run[0]}–{run[-1]}",
+                            f"{start:.3f}",
+                            "mouse",
+                            f"move ×{len(run)}",
+                            "",
+                            "",
+                            "",
+                            "",
+                            f"Mouse group {group_no} · {end - start:.3f}s",
+                        ],
+                        tint=move_tint,
+                    )
+                    parent.setData(0, Qt.ItemDataRole.UserRole, list(run))
+                    for src in run:
+                        child = self._make_item(self._row_values(src, events[src]), tint=move_tint)
+                        child.setData(0, Qt.ItemDataRole.UserRole, src)
+                        parent.addChild(child)
+                    parent.setExpanded(False)
+                    self.tree.addTopLevelItem(parent)
+                    i = j
+                    continue
+                # A lone move falls through to a normal top-level row.
+            if not self._row_matches(event):
+                i += 1
+                continue
             tint = self._kind_colors.get(event.kind)
-            for col, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                if col == 0:
-                    item.setData(Qt.ItemDataRole.UserRole, source_index)
-                if tint and col == 2:
-                    color = QColor(tint)
-                    color.setAlpha(60)
-                    item.setBackground(color)
-                self.table.setItem(row, col, item)
-        self.table.resizeColumnsToContents()
+            item = self._make_item(self._row_values(source_index, event), tint=tint)
+            item.setData(0, Qt.ItemDataRole.UserRole, source_index)
+            if event.kind == "image":
+                thumb = _image_thumbnail(event.image_b64)
+                if thumb is not None:
+                    item.setIcon(0, thumb)
+            self.tree.addTopLevelItem(item)
+            i += 1
+        for col in range(len(self._columns)):
+            self.tree.resizeColumnToContents(col)
         self.undo_button.setEnabled(bool(self._history))
         self.redo_button.setEnabled(bool(self._redo))
 
@@ -236,6 +332,30 @@ class EditorDialog(QDialog):
             )
         )
 
+    def insert_image_step(self) -> None:
+        dialog = ImageStepDialog(parent=self)
+        if not dialog.exec():
+            return
+        indices = self._selected_source_indices()
+        at = indices[0] if indices else len(self.macro.sorted_events())
+        self._apply(self.macro.insert_image(at, dialog.build_event()))
+
+    def edit_image_step(self, index: int) -> None:
+        event = self.macro.sorted_events()[index]
+        dialog = ImageStepDialog(event=event, parent=self)
+        if not dialog.exec():
+            return
+        self._apply(self.macro.replace_event(index, dialog.build_event(event.timestamp_ns)))
+
+    def _on_double_click(self, item, _column: int = 0) -> None:
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if isinstance(data, int):
+            event = self.macro.sorted_events()[data]
+            if event.kind == "image":
+                self.edit_image_step(data)
+                return
+        self.edit_note()
+
     def edit_note(self) -> None:
         indices = self._selected_source_indices()
         if not indices:
@@ -249,3 +369,17 @@ class EditorDialog(QDialog):
     def accept(self) -> None:
         self.macro_changed.emit(self.macro)
         super().accept()
+
+
+def _image_thumbnail(image_b64: str) -> QIcon | None:
+    """Decode an embedded base64 PNG into a small icon for the editor tree."""
+    if not image_b64:
+        return None
+    try:
+        raw = base64.b64decode(image_b64)
+    except Exception:  # noqa: BLE001
+        return None
+    image = QImage()
+    if not image.loadFromData(raw, "PNG"):
+        return None
+    return QIcon(QPixmap.fromImage(image))

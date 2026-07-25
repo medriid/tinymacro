@@ -39,12 +39,29 @@ without losing its lightweight, keep-it-on-top footprint.
   delete, keep-range, timing scale, and in-session **undo/redo**.
 - Macro composition helpers: chain/playlist multiple macros and repeat a macro
   N times (see `Macro.then`, `Macro.chain`, `Macro.repeated`).
+- Consecutive mouse movements collapse into expandable **movement groups** in the
+  editor timeline, so clicks and key events stay easy to find.
+
+### Visual automation (optional `vision` extras)
+
+- **Click-Image step**: insert a step that searches the screen for an uploaded
+  image and clicks it once found, with adjustable **match confidence**, timeout,
+  click button/offset, and an on-missing policy (fail / skip / continue). The
+  target image is embedded in the `.tmacro`, so macros stay self-contained.
+- **Image-trigger scheduler**: a second scheduler variant that runs a macro
+  **whenever a target image appears on screen**. Its loop count caps how many
+  sightings it acts on, and the trigger is suppressed while its macro plays so it
+  never re-fires on the same still-visible image.
+- Needs the `vision` extras (`pip install "tiny-macro[vision]"`: OpenCV + mss).
+  These are bundled in the prebuilt binaries. Screen capture works on Windows and
+  X11; on pure Wayland it degrades gracefully with a clear message.
 
 ### Automation & integrations
 
 - **Macro library**: a local index of your macros with favorites, tags, search,
   recents, and run counts — independent of the OS file picker.
-- **Scheduler**: run a macro on an interval, once at a time, or daily.
+- **Scheduler**: run a macro on an interval, once at a time, daily, or when an
+  image appears on screen (see above).
 - **Settings profiles**: keep multiple named configurations and import/export
   them as JSON.
 - **Pluggable notifications**: Discord webhook (with templated embeds and
@@ -57,9 +74,9 @@ without losing its lightweight, keep-it-on-top footprint.
 
 - X11 backend through `pynput`; Wayland backend through `evdev`/`uinput`;
   Windows backend through native hooks and `SendInput`.
-- Native `.tmacro` JSON macro format, now at **format version 2** (adds wait
-  steps, per-event notes, and macro tags). Version-1 files load unchanged and
-  are transparently upgraded on load.
+- Native `.tmacro` JSON macro format, now at **format version 3** (adds wait
+  steps, per-event notes, macro tags, and click-image steps). Version-1/2 files
+  load unchanged and are transparently upgraded on load.
 - Exportable standalone macro runner scripts.
 - Customizable global hotkeys and an optional debug mode with detailed errors.
 

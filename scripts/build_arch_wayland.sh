@@ -156,7 +156,7 @@ source .venv-build/bin/activate
 
 python -m pip --version >/dev/null 2>&1 || fail "pip is unavailable inside the virtualenv."
 run_step "Upgrading Python build tools" python -m pip install --upgrade pip wheel setuptools
-run_step "Installing Tiny Macro and PyInstaller into the virtualenv" python -m pip install -e ".[build]"
+run_step "Installing Tiny Macro and PyInstaller into the virtualenv" python -m pip install -e ".[build,vision]"
 
 need_command pyinstaller "PyInstaller should have been installed in .venv-build/bin; activation may have failed."
 

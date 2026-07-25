@@ -62,7 +62,12 @@ $pyinstaller = Join-Path $root ".venv-windows-build\Scripts\pyinstaller.exe"
 
 Say "Installing Tiny Macro and PyInstaller"
 Invoke-Native $python -m pip install --upgrade pip wheel setuptools
-Invoke-Native $python -m pip install --timeout 120 --retries 20 -e ".[build]"
+Invoke-Native $python -m pip install --timeout 120 --retries 20 -e ".[build,vision]"
+
+Say "Regenerating multi-resolution app icon"
+$env:QT_QPA_PLATFORM = "offscreen"
+Invoke-Native $python -c "from tinymacro.gui.icons import render_app_ico, ICON_DIR; render_app_ico(ICON_DIR / 'app' / 'app.ico')"
+Remove-Item Env:\QT_QPA_PLATFORM -ErrorAction SilentlyContinue
 
 Say "Cleaning old Windows build output"
 if (Test-Path -LiteralPath "build") {

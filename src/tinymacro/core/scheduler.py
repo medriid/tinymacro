@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Literal
 
-ScheduleKind = Literal["interval", "daily", "once"]
+ScheduleKind = Literal["interval", "daily", "once", "image"]
 
 
 def default_schedule_path() -> Path:
@@ -20,6 +20,10 @@ class Schedule:
     * ``interval`` -- every ``interval_seconds`` seconds.
     * ``daily``    -- once per day at ``at_hour``:``at_minute`` (local time).
     * ``once``     -- a single run at a specific ``run_at`` timestamp.
+    * ``image``    -- whenever ``image_b64`` appears on screen. Driven by the
+      :class:`~tinymacro.core.image_watcher.ImageWatcher`, not the timed poller,
+      so :meth:`is_due` is always False for it. ``loop_count`` is the maximum
+      number of times it may fire (0 = unlimited); ``_fire_count`` tracks fires.
     """
 
     macro_path: str
@@ -32,15 +36,28 @@ class Schedule:
     speed: float = 1.0
     enabled: bool = True
     name: str = ""
+    # -- image-trigger fields (schedules format v2) ---------------------------
+    image_b64: str = ""
+    confidence: float = 0.85
+    poll_seconds: float = 2.0
+    region: tuple[int, int, int, int] | None = None
     _last_fired: str = ""
+    _fire_count: int = 0
 
     def validate(self) -> None:
-        if self.kind not in ("interval", "daily", "once"):
+        if self.kind not in ("interval", "daily", "once", "image"):
             raise ValueError("Invalid schedule kind")
         if self.kind == "interval" and self.interval_seconds < 1:
             raise ValueError("Interval must be at least 1 second")
         if self.kind == "daily" and not (0 <= self.at_hour < 24 and 0 <= self.at_minute < 60):
             raise ValueError("Invalid daily time")
+        if self.kind == "image":
+            if not self.image_b64:
+                raise ValueError("Image trigger needs a target image")
+            if not (0.0 < self.confidence <= 1.0):
+                raise ValueError("Confidence must be between 0 and 1")
+            if self.poll_seconds <= 0:
+                raise ValueError("Poll interval must be positive")
         if self.speed <= 0:
             raise ValueError("Speed must be positive")
         if self.loop_count < 0:
@@ -50,9 +67,27 @@ class Schedule:
     def display_name(self) -> str:
         return self.name or Path(self.macro_path).stem
 
+    @property
+    def is_image(self) -> bool:
+        return self.kind == "image"
+
+    @property
+    def fire_count(self) -> int:
+        return self._fire_count
+
+    def can_fire(self) -> bool:
+        """True when an image trigger is still allowed to fire again."""
+        if not self.enabled:
+            return False
+        return self.loop_count == 0 or self._fire_count < self.loop_count
+
+    def mark_image_fired(self) -> None:
+        self._fire_count += 1
+
     def next_run_after(self, reference: datetime) -> datetime | None:
         """Return the next datetime this schedule should fire at, or None."""
-        if not self.enabled:
+        if not self.enabled or self.kind == "image":
+            # Image triggers are event-driven, never time-due.
             return None
         if self.kind == "interval":
             last = self._parse(self._last_fired)
@@ -92,7 +127,7 @@ class Schedule:
             return None
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        data: dict[str, object] = {
             "macro_path": self.macro_path,
             "kind": self.kind,
             "interval_seconds": self.interval_seconds,
@@ -105,9 +140,21 @@ class Schedule:
             "name": self.name,
             "last_fired": self._last_fired,
         }
+        # Only image triggers carry the v2 fields, so timed schedules stay
+        # byte-for-byte v1-shaped.
+        if self.kind == "image":
+            data["image_b64"] = self.image_b64
+            data["confidence"] = self.confidence
+            data["poll_seconds"] = self.poll_seconds
+            data["fire_count"] = self._fire_count
+            if self.region:
+                data["region"] = list(self.region)
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> "Schedule":
+        raw_region = data.get("region")
+        region = tuple(int(v) for v in raw_region) if raw_region else None  # type: ignore[arg-type]
         schedule = cls(
             macro_path=str(data.get("macro_path", "")),
             kind=str(data.get("kind", "interval")),  # type: ignore[arg-type]
@@ -119,8 +166,13 @@ class Schedule:
             speed=float(data.get("speed", 1.0)),
             enabled=bool(data.get("enabled", True)),
             name=str(data.get("name", "")),
+            image_b64=str(data.get("image_b64", "")),
+            confidence=float(data.get("confidence", 0.85)),
+            poll_seconds=float(data.get("poll_seconds", 2.0)),
+            region=region,
         )
         schedule._last_fired = str(data.get("last_fired", ""))
+        schedule._fire_count = int(data.get("fire_count", 0))
         return schedule
 
 
@@ -141,8 +193,11 @@ class ScheduleStore:
         now = now or datetime.now()
         return [s for s in self.schedules if s.is_due(now)]
 
+    def image_triggers(self) -> list[Schedule]:
+        return [s for s in self.schedules if s.is_image]
+
     def to_dict(self) -> dict[str, object]:
-        return {"version": 1, "schedules": [s.to_dict() for s in self.schedules]}
+        return {"version": 2, "schedules": [s.to_dict() for s in self.schedules]}
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> "ScheduleStore":

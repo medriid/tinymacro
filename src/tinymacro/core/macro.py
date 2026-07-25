@@ -10,9 +10,9 @@ from typing import Any, Iterable
 from .events import MacroEvent
 
 # v2 adds optional per-event fields (duration/jitter/note) and macro-level tags.
-# Readers stay backward compatible: v1 files load unchanged, and v2 files only
-# carry the new keys when they are actually used.
-FORMAT_VERSION = 2
+# v3 adds the ``image`` (click-image) step. Readers stay backward compatible:
+# v1/v2 files load unchanged, and newer keys are only written when actually used.
+FORMAT_VERSION = 3
 NANOSECONDS_PER_SECOND = 1_000_000_000
 
 
@@ -53,6 +53,9 @@ class Macro:
 
     def wait_event_count(self) -> int:
         return sum(1 for event in self.events if event.kind == "wait")
+
+    def image_event_count(self) -> int:
+        return sum(1 for event in self.events if event.kind == "image")
 
     # -- normalization / editing ---------------------------------------------
     def normalized(self) -> "Macro":
@@ -108,6 +111,23 @@ class Macro:
         ]
         shifted.insert(index, wait)
         return self.copy_with(events=shifted).normalized()
+
+    def insert_image(self, index: int, event: MacroEvent) -> "Macro":
+        """Insert a prebuilt ``image`` step before ``index``.
+
+        Unlike :meth:`insert_wait`, an image step has no fixed duration (its cost
+        is decided at playback by the on-screen search), so later events are not
+        pushed back. The step takes the timestamp of the event it precedes, and a
+        stable sort keeps it just before that event.
+        """
+        if event.kind != "image":
+            raise ValueError("insert_image expects an image event")
+        events = self.sorted_events()
+        index = max(0, min(index, len(events)))
+        at_ns = events[index].timestamp_ns if index < len(events) else self.duration_ns
+        placed = event._with(timestamp_ns=at_ns)
+        events.insert(index, placed)
+        return self.copy_with(events=events).normalized()
 
     def set_note(self, index: int, note: str) -> "Macro":
         events = self.sorted_events()

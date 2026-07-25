@@ -65,17 +65,18 @@ def test_tags_and_description_round_trip():
     assert restored.description == "demo"
 
 
-def test_format_version_is_two_and_v1_loads():
-    assert FORMAT_VERSION == 2
-    v1 = {
-        "format": "tiny-macro",
-        "version": 1,
-        "name": "old",
-        "events": [{"timestamp_ns": 0, "kind": "key", "action": "press", "key": "x"}],
-    }
-    macro = Macro.from_dict(v1)
-    assert macro.name == "old"
-    assert len(macro.events) == 1
+def test_format_version_is_three_and_older_files_load():
+    assert FORMAT_VERSION == 3
+    for version in (1, 2):
+        older = {
+            "format": "tiny-macro",
+            "version": version,
+            "name": "old",
+            "events": [{"timestamp_ns": 0, "kind": "key", "action": "press", "key": "x"}],
+        }
+        macro = Macro.from_dict(older)
+        assert macro.name == "old"
+        assert len(macro.events) == 1
 
 
 def test_rejects_newer_version():

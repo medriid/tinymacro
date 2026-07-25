@@ -17,6 +17,8 @@ from PyQt6.QtWidgets import (
 )
 
 from tinymacro.core.library import MacroLibrary
+from tinymacro.gui.icons import get_icon
+from tinymacro.gui.theme import icon_color
 
 
 class LibraryDialog(QDialog):
@@ -45,14 +47,15 @@ class LibraryDialog(QDialog):
         self.list.itemDoubleClicked.connect(lambda *_: self._open())
         self.info = QLabel()
 
-        self.open_button = QPushButton("Open")
-        self.play_button = QPushButton("Play")
+        color = icon_color()
+        self.open_button = QPushButton(get_icon("open", color), "Open")
+        self.play_button = QPushButton(get_icon("play", color), "Play")
         self.play_button.setObjectName("primary")
-        self.favorite_button = QPushButton("Toggle Favorite")
-        self.add_button = QPushButton("Add File…")
-        self.remove_button = QPushButton("Remove")
-        self.prune_button = QPushButton("Prune Missing")
-        close_button = QPushButton("Close")
+        self.favorite_button = QPushButton(get_icon("star_filled", color), "Toggle Favorite")
+        self.add_button = QPushButton(get_icon("add_file", color), "Add File…")
+        self.remove_button = QPushButton(get_icon("remove", color), "Remove")
+        self.prune_button = QPushButton(get_icon("prune", color), "Prune Missing")
+        close_button = QPushButton(get_icon("close", color), "Close")
 
         buttons = QHBoxLayout()
         for widget in (
@@ -91,12 +94,13 @@ class LibraryDialog(QDialog):
     def _refresh(self) -> None:
         self.list.clear()
         entries = self.library.search(self.search.text(), favorites_only=self.favorites_only.isChecked())
+        color = icon_color()
         for entry in entries:
-            star = "★ " if entry.favorite else ""
             missing = "" if entry.exists else "  (missing)"
             tags = f"  [{', '.join(entry.tags)}]" if entry.tags else ""
             runs = f"  · {entry.run_count} runs" if entry.run_count else ""
-            item = QListWidgetItem(f"{star}{entry.display_name}{tags}{runs}{missing}")
+            item = QListWidgetItem(f"{entry.display_name}{tags}{runs}{missing}")
+            item.setIcon(get_icon("star_filled" if entry.favorite else "star_outline", color))
             item.setData(Qt.ItemDataRole.UserRole, entry.path)
             self.list.addItem(item)
         self.info.setText(f"{len(entries)} shown · {len(self.library.entries)} in library")

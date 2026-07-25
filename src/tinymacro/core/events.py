@@ -6,14 +6,24 @@ from typing import Any, Literal
 # ``wait`` is a synthetic step that pauses playback for ``duration_ns`` (plus an
 # optional random ``jitter_ns``) without emitting real input. It lets a macro
 # carry explicit, editable pauses instead of only implicit timestamp gaps.
-EventKind = Literal["key", "mouse", "wheel", "wait"]
-EventAction = Literal["press", "release", "move", "scroll", "delay"]
+#
+# ``image`` is a synthetic step (format v3) that, at playback time, searches the
+# screen for an embedded target image and clicks it once found. It emits no input
+# directly; the player synthesizes the click, so ``is_input`` is False for it.
+EventKind = Literal["key", "mouse", "wheel", "wait", "image"]
+EventAction = Literal["press", "release", "move", "scroll", "delay", "click"]
 
 # Bumped alongside macro.FORMAT_VERSION when the on-disk shape grows. New
 # optional fields are only written when they differ from their defaults so that
 # version-1 readers keep working and version-1 files load unchanged.
 DEFAULT_DURATION_NS = 0
 DEFAULT_JITTER_NS = 0
+
+# Defaults for the ``image`` (click-image) step.
+DEFAULT_CONFIDENCE = 0.85
+DEFAULT_TIMEOUT_MS = 5000
+# What to do when the target image is not found before the timeout elapses.
+OnMissing = Literal["fail", "skip", "continue"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +51,16 @@ class MacroEvent:
     duration_ns: int = DEFAULT_DURATION_NS
     jitter_ns: int = DEFAULT_JITTER_NS
     note: str = ""
+    # -- image (click-image) step fields, format v3 ---------------------------
+    image_b64: str = ""
+    confidence: float = 0.0
+    timeout_ms: int = 0
+    on_missing: OnMissing = "fail"
+    click_button: str = "left"  # "none" waits for the image without clicking
+    offset_x: int = 0
+    offset_y: int = 0
+    grayscale: bool = True
+    region: tuple[int, int, int, int] | None = None
 
     # -- construction helpers -------------------------------------------------
     @classmethod
@@ -54,10 +74,46 @@ class MacroEvent:
             note=note,
         )
 
+    @classmethod
+    def image_click(
+        cls,
+        timestamp_ns: int,
+        image_b64: str,
+        *,
+        confidence: float = DEFAULT_CONFIDENCE,
+        timeout_ms: int = DEFAULT_TIMEOUT_MS,
+        on_missing: OnMissing = "fail",
+        click_button: str = "left",
+        offset_x: int = 0,
+        offset_y: int = 0,
+        grayscale: bool = True,
+        region: tuple[int, int, int, int] | None = None,
+        note: str = "",
+    ) -> "MacroEvent":
+        return cls(
+            timestamp_ns=timestamp_ns,
+            kind="image",
+            action="click",
+            image_b64=image_b64,
+            confidence=float(confidence),
+            timeout_ms=max(0, int(timeout_ms)),
+            on_missing=on_missing,
+            click_button=click_button,
+            offset_x=int(offset_x),
+            offset_y=int(offset_y),
+            grayscale=bool(grayscale),
+            region=tuple(region) if region else None,  # type: ignore[arg-type]
+            note=note,
+        )
+
     @property
     def is_input(self) -> bool:
-        """True when the event produces real input (i.e. should be emitted)."""
-        return self.kind != "wait"
+        """True when the event produces real input (i.e. should be emitted).
+
+        Synthetic steps (``wait``, ``image``) return False: the player handles
+        them specially rather than sending them straight to a backend.
+        """
+        return self.kind not in ("wait", "image")
 
     def replace(self, **changes: Any) -> "MacroEvent":
         data = self.to_dict()
@@ -88,6 +144,15 @@ class MacroEvent:
             duration_ns=self.duration_ns,
             jitter_ns=self.jitter_ns,
             note=self.note,
+            image_b64=self.image_b64,
+            confidence=self.confidence,
+            timeout_ms=self.timeout_ms,
+            on_missing=self.on_missing,
+            click_button=self.click_button,
+            offset_x=self.offset_x,
+            offset_y=self.offset_y,
+            grayscale=self.grayscale,
+            region=self.region,
         )
         base.update(changes)
         return MacroEvent(**base)
@@ -99,6 +164,9 @@ class MacroEvent:
             if self.jitter_ns:
                 return f"wait {base:.0f}–{base + self.jitter_ns / 1_000_000:.0f} ms"
             return f"wait {base:.0f} ms"
+        if self.kind == "image":
+            verb = "find" if self.click_button == "none" else "click"
+            return f"image {verb} · conf {self.confidence:.2f}"
         if self.kind == "key":
             return f"key {self.action} {self.key}"
         if self.kind == "wheel":
@@ -129,6 +197,22 @@ class MacroEvent:
             data["jitter_ns"] = self.jitter_ns
         if self.note:
             data["note"] = self.note
+        # v3 image-step fields, likewise only emitted for image events so other
+        # events stay byte-for-byte v1/v2-shaped.
+        if self.kind == "image":
+            data["image_b64"] = self.image_b64
+            data["confidence"] = self.confidence
+            data["timeout_ms"] = self.timeout_ms
+            data["on_missing"] = self.on_missing
+            data["click_button"] = self.click_button
+            if self.offset_x:
+                data["offset_x"] = self.offset_x
+            if self.offset_y:
+                data["offset_y"] = self.offset_y
+            if not self.grayscale:
+                data["grayscale"] = self.grayscale
+            if self.region:
+                data["region"] = list(self.region)
         return data
 
     @classmethod
@@ -142,6 +226,8 @@ class MacroEvent:
             kind = "mouse"
             button = legacy_button
             key = None
+        raw_region = data.get("region")
+        region = tuple(int(v) for v in raw_region) if raw_region else None
         return cls(
             timestamp_ns=int(data["timestamp_ns"]),
             kind=kind,
@@ -155,6 +241,15 @@ class MacroEvent:
             duration_ns=int(data.get("duration_ns", DEFAULT_DURATION_NS)),
             jitter_ns=int(data.get("jitter_ns", DEFAULT_JITTER_NS)),
             note=str(data.get("note", "")),
+            image_b64=str(data.get("image_b64", "")),
+            confidence=float(data.get("confidence", 0.0)),
+            timeout_ms=int(data.get("timeout_ms", 0)),
+            on_missing=str(data.get("on_missing", "fail")),  # type: ignore[arg-type]
+            click_button=str(data.get("click_button", "left")),
+            offset_x=int(data.get("offset_x", 0)),
+            offset_y=int(data.get("offset_y", 0)),
+            grayscale=bool(data.get("grayscale", True)),
+            region=region,  # type: ignore[arg-type]
         )
 
 

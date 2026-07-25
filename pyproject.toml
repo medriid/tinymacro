@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tiny-macro"
-version = "0.2.0"
+version = "0.3.0"
 description = "A deterministic PyQt6 macro recorder for Linux and Windows desktops."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -20,6 +20,17 @@ dependencies = [
 dev = [
   "pytest>=8.2",
   "pytest-qt>=4.4",
+  "opencv-python-headless>=4.9",
+  "mss>=9.0",
+  "numpy>=1.26",
+]
+# On-screen image matching for the "click image" step and image-triggered
+# scheduler. Headless OpenCV avoids shipping a second Qt that would clash with
+# PyQt6's platform plugins inside the PyInstaller bundle.
+vision = [
+  "opencv-python-headless>=4.9",
+  "mss>=9.0",
+  "numpy>=1.26",
 ]
 build = [
   "pyinstaller>=6.9",
@@ -30,6 +41,9 @@ tiny-macro = "tinymacro.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"tinymacro.gui" = ["icons/**/*.svg", "icons/**/*.ico", "icons/**/*.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
