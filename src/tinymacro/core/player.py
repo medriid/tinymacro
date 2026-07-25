@@ -70,9 +70,15 @@ def simulate(macro: Macro) -> SimulationReport:
             warnings.append(f"event {index} is a mouse click with no button")
         if event.kind == "key" and event.action in {"press", "release"} and not event.key:
             warnings.append(f"event {index} is a key event with no key")
+        if event.kind == "wheel" and not event.dx and not event.dy:
+            warnings.append(f"event {index} is a wheel scroll with no delta")
+        if event.kind == "mouse" and event.action == "move" and event.x is None and not event.dx and not event.dy:
+            warnings.append(f"event {index} is a mouse move with no target")
         if event.kind == "image":
             if not event.image_b64:
                 warnings.append(f"event {index} is a click-image step with no image")
+            if not (0.0 < event.confidence <= 1.0):
+                warnings.append(f"event {index} has an out-of-range confidence")
             if not _vision_available():
                 warnings.append(
                     f"event {index} is a click-image step but the 'vision' extras are not installed"
@@ -99,6 +105,9 @@ class Player:
     # thread (mss is not thread-safe), once per run, and closed at the end. When
     # None (or vision deps missing) image steps fall back to their on_missing rule.
     locator_factory: Callable[[], "Locator"] | None = None
+    # Called (on the playback thread) when a click-image step fails to find its
+    # target, so the host can log it and save a failure screenshot for debugging.
+    on_image_missed: Callable[[MacroEvent], None] | None = None
     rng: random.Random = field(default_factory=random.Random)
 
     state: PlaybackState = field(default_factory=PlaybackState)
@@ -234,7 +243,13 @@ class Player:
             if event.click_button and event.click_button != "none":
                 self._emit_click(match.x + event.offset_x, match.y + event.offset_y, event.click_button)
             return
-        # Not found (or unable to search): honor the on_missing policy.
+        # Not found (or unable to search): let the host record the failure, then
+        # honor the on_missing policy.
+        if self.on_image_missed is not None:
+            try:
+                self.on_image_missed(event)
+            except Exception:  # noqa: BLE001 - diagnostics must never break playback
+                pass
         if event.on_missing == "fail":
             raise RuntimeError(f"Image not found within {event.timeout_ms} ms")
         # "skip" / "continue": fall through and keep playing.

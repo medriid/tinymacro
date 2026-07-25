@@ -108,11 +108,19 @@ class PreferencesDialog(QDialog):
         self.humanize_jitter.setRange(0, 5000)
         self.humanize_jitter.setSuffix(" ms")
         self.humanize_jitter.setValue(s.humanize_jitter_ms)
+        self.record_countdown = QSpinBox()
+        self.record_countdown.setRange(0, 30)
+        self.record_countdown.setSuffix(" s")
+        self.record_countdown.setValue(s.record_countdown)
+        self.auto_trim_leading = QCheckBox()
+        self.auto_trim_leading.setChecked(s.auto_trim_leading)
 
         form = QFormLayout()
         form.addRow("Skip final click on stop", self.skip_final_click)
         form.addRow("Mouse-move sampling interval", self.move_min_interval)
         form.addRow("Playback timing jitter (QA realism)", self.humanize_jitter)
+        form.addRow("Countdown before recording (0 = off)", self.record_countdown)
+        form.addRow("Auto-trim idle before first action", self.auto_trim_leading)
         return _wrap(form)
 
     def _build_hotkeys_tab(self) -> QWidget:
@@ -221,6 +229,8 @@ class PreferencesDialog(QDialog):
             s.skip_final_click = self.skip_final_click.isChecked()
             s.move_min_interval_ms = self.move_min_interval.value()
             s.humanize_jitter_ms = self.humanize_jitter.value()
+            s.record_countdown = self.record_countdown.value()
+            s.auto_trim_leading = self.auto_trim_leading.isChecked()
             s.loop_count = self.loop_count.value()
             s.speed = self.speed.value()
             s.log_to_file = self.log_to_file.isChecked()

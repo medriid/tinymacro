@@ -163,6 +163,11 @@ class Locator:
         frame = np.asarray(shot)[:, :, :3]
         return frame, origin_x, origin_y
 
+    def capture_png(self, region: Region | None = None) -> bytes:
+        """Grab the screen (or ``region``) and return it as PNG bytes."""
+        frame, _ox, _oy = self._grab(region)
+        return encode_png(frame)
+
     def locate(
         self,
         needle_png: bytes,

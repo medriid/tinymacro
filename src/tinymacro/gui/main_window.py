@@ -100,6 +100,7 @@ class MainWindow(QMainWindow):
         # player's own thread (mss is not thread-safe). Missing deps → None,
         # so image steps fall back to their on_missing rule.
         self.player.locator_factory = (lambda: Locator()) if CAPTURE_AVAILABLE else None
+        self.player.on_image_missed = self._on_image_missed
         self.bridge = PlaybackSignalBridge(self)
         self.bridge.loop_completed.connect(self._handle_loop_completed)
         self.bridge.notify_error.connect(lambda message: self._toast(message, "error"))
@@ -133,6 +134,8 @@ class MainWindow(QMainWindow):
             on_match=lambda schedule: self.bridge.image_trigger.emit(schedule),
         )
         self._active_image_schedule: Schedule | None = None
+        self._countdown_active = False
+        self._countdown_left = 0
 
         self.setWindowTitle("Tiny Macro")
         self.setWindowIcon(app_icon())
@@ -157,6 +160,8 @@ class MainWindow(QMainWindow):
         self._schedule_timer = QTimer(self)
         self._schedule_timer.timeout.connect(self._check_schedules)
         self._schedule_timer.start(30_000)
+        self._countdown_timer = QTimer(self)
+        self._countdown_timer.timeout.connect(self._tick_countdown)
         self._refresh_image_watcher()
 
         self._offer_recovery()
@@ -296,6 +301,7 @@ class MainWindow(QMainWindow):
         self._menu_action(tools_menu, "library", "Macro Library", self.open_library)
         self._menu_action(tools_menu, "scheduler", "Scheduler", self.open_scheduler)
         self._menu_action(tools_menu, "validate", "Validate (dry run)", self.validate_macro)
+        self._menu_action(tools_menu, "note", "Drop Marker (while recording)", self.drop_marker)
         self._menu_action(tools_menu, "logs", "Log Viewer", self.open_logs)
 
         view_menu = self.menuBar().addMenu("View")
@@ -349,24 +355,65 @@ class MainWindow(QMainWindow):
         try:
             if self.recorder.recording:
                 self.macro = self.recorder.stop()
+                if self.settings.auto_trim_leading:
+                    self.macro = self.macro.trim_leading_idle()
                 self.dirty = True
                 self._last_feed_count = 0
                 self.log.info("Recording stopped: %d events", len(self.macro.events))
                 self._toast("Recording stopped", "info")
+                self._update_state()
+            elif self._countdown_active:
+                self._cancel_countdown()
             else:
-                self.player.stop()
-                self.recorder.skip_final_click = self.settings.skip_final_click
-                self.recorder.hotkeys = self.settings.hotkeys
-                self.recorder.move_min_interval_ns = self.settings.move_min_interval_ms * 1_000_000
-                self.feed.clear()
-                self._last_feed_count = 0
-                self.recorder.start()
-                self.log.info("Recording started")
-                self._toast("Recording…", "success")
-            self._update_state()
+                self._start_recording_with_countdown()
         except Exception as exc:
             self._report_error("Recording failed", exc)
             self._update_state()
+
+    def _start_recording_with_countdown(self) -> None:
+        seconds = max(0, self.settings.record_countdown)
+        if seconds <= 0:
+            self._begin_recording()
+            return
+        self._countdown_active = True
+        self._countdown_left = seconds
+        self._toast(f"Recording in {seconds}…", "info", 900)
+        self.record_action.setChecked(True)
+        self._countdown_timer.start(1000)
+
+    def _tick_countdown(self) -> None:
+        self._countdown_left -= 1
+        if self._countdown_left <= 0:
+            self._cancel_countdown(begin=True)
+        else:
+            self._toast(f"Recording in {self._countdown_left}…", "info", 900)
+
+    def _cancel_countdown(self, begin: bool = False) -> None:
+        self._countdown_timer.stop()
+        self._countdown_active = False
+        if begin:
+            self._begin_recording()
+        else:
+            self.record_action.setChecked(False)
+            self._toast("Recording cancelled", "info")
+            self._update_state()
+
+    def _begin_recording(self) -> None:
+        self.player.stop()
+        self.recorder.skip_final_click = self.settings.skip_final_click
+        self.recorder.hotkeys = self.settings.hotkeys
+        self.recorder.move_min_interval_ns = self.settings.move_min_interval_ms * 1_000_000
+        self.feed.clear()
+        self._last_feed_count = 0
+        self.recorder.start()
+        self.log.info("Recording started")
+        self._toast("Recording…", "success")
+        self._update_state()
+
+    def drop_marker(self) -> None:
+        if self.recorder.recording:
+            self.recorder.add_marker("marker")
+            self._toast("Marker dropped", "info", 1200)
 
     def toggle_playback(self) -> None:
         if self.player.state.playing:
@@ -521,7 +568,20 @@ class MainWindow(QMainWindow):
     def open_editor(self) -> None:
         dialog = EditorDialog(self.macro, self, colors=self.colors)
         dialog.macro_changed.connect(self._replace_macro)
+        dialog.run_from_requested.connect(self._run_macro_from)
         dialog.exec()
+
+    def _run_macro_from(self, index: int) -> None:
+        """Play the current macro starting at ``index`` (editor 'Run from here')."""
+        events = self.macro.sorted_events()
+        if not (0 <= index < len(events)):
+            return
+        tail = self.macro.copy_with(events=events[index:]).normalized()
+        try:
+            self.player.start(tail, loop_count=1, speed=self.speed_spin.value())
+        except Exception as exc:  # noqa: BLE001
+            self._report_error("Playback failed", exc)
+        self._update_state()
 
     def _replace_macro(self, macro: Macro) -> None:
         self.macro = macro
@@ -628,7 +688,10 @@ class MainWindow(QMainWindow):
 
     def _activate_hotkeys(self, pressed: frozenset[str]) -> None:
         hotkeys = self.settings.hotkeys
-        if hotkeys.record.is_subset_of(pressed):
+        # Marker is checked first so it works while a recording is in progress.
+        if self.recorder.recording and hotkeys.marker.is_subset_of(pressed):
+            self.drop_marker()
+        elif hotkeys.record.is_subset_of(pressed):
             self.toggle_recording()
         elif hotkeys.play.is_subset_of(pressed):
             self.toggle_playback()
@@ -645,6 +708,25 @@ class MainWindow(QMainWindow):
     def _on_progress(self, index: int, total: int) -> None:
         if total > 0:
             self.progress.setValue(int(index * 100 / total))
+
+    def _on_image_missed(self, event) -> None:
+        """Runs on the playback thread when a click-image step can't find its target.
+
+        Logs the miss and, when capture is available, saves a full-screen PNG next
+        to the recovery file so the failure can be inspected afterwards.
+        """
+        self.log.warning("Click-image step missed (confidence %.2f)", event.confidence)
+        if not CAPTURE_AVAILABLE:
+            return
+        try:
+            with Locator() as locator:
+                png = locator.capture_png(event.region)
+            target = self._recovery_path().parent / f"image-miss-{datetime.now():%Y%m%d-%H%M%S}.png"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(png)
+            self.log.info("Saved failure screenshot: %s", target)
+        except Exception as exc:  # noqa: BLE001
+            self.log.warning("Could not save failure screenshot: %s", exc)
 
     def _report_error(self, title: str, exc: Exception, *, always_dialog: bool = False) -> None:
         details = self._format_exception(exc)

@@ -77,6 +77,13 @@ class Recorder:
         self._paused_ns += max(0, self.clock_ns() - self._pause_started_ns)
         self._paused = False
 
+    def add_marker(self, note: str = "marker") -> None:
+        """Drop a labelled zero-length wait as a bookmark/comment in the timeline."""
+        if not self._recording:
+            return
+        offset = max(0, self.clock_ns() - self._start_ns - self._paused_ns)
+        self._events.append(MacroEvent.wait(offset, 0, 0, note=note))
+
     def mark_segment(self) -> None:
         """Remember the current position so a later ``undo_segment`` can revert."""
         self._segment_marks.append(len(self._events))

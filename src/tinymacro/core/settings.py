@@ -38,6 +38,9 @@ class Settings:
     # Capture / playback tuning
     move_min_interval_ms: int = 0
     humanize_jitter_ms: int = 0
+    # Recording quality-of-life
+    record_countdown: int = 0  # seconds counted down before capture starts
+    auto_trim_leading: bool = False  # drop idle time before the first action
     # Reliability
     autosave_seconds: int = 30
     log_to_file: bool = True
@@ -69,6 +72,8 @@ class Settings:
             raise ValueError("Move sampling interval must be zero or positive")
         if self.humanize_jitter_ms < 0:
             raise ValueError("Humanize jitter must be zero or positive")
+        if self.record_countdown < 0:
+            raise ValueError("Record countdown must be zero or positive")
         if self.autosave_seconds < 0:
             raise ValueError("Autosave interval must be zero or positive")
         self.hotkeys.validate()
@@ -91,6 +96,8 @@ class Settings:
             "tray_enabled": self.tray_enabled,
             "move_min_interval_ms": self.move_min_interval_ms,
             "humanize_jitter_ms": self.humanize_jitter_ms,
+            "record_countdown": self.record_countdown,
+            "auto_trim_leading": self.auto_trim_leading,
             "autosave_seconds": self.autosave_seconds,
             "log_to_file": self.log_to_file,
             "hotkeys": self.hotkeys.to_dict(),
@@ -114,6 +121,8 @@ class Settings:
             tray_enabled=bool(data.get("tray_enabled", True)),
             move_min_interval_ms=int(data.get("move_min_interval_ms", 0)),
             humanize_jitter_ms=int(data.get("humanize_jitter_ms", 0)),
+            record_countdown=int(data.get("record_countdown", 0)),
+            auto_trim_leading=bool(data.get("auto_trim_leading", False)),
             autosave_seconds=int(data.get("autosave_seconds", 30)),
             log_to_file=bool(data.get("log_to_file", True)),
             hotkeys=HotkeySet.from_dict(data.get("hotkeys", {}) if isinstance(data.get("hotkeys"), dict) else {}),

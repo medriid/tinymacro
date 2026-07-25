@@ -73,6 +73,26 @@ class Macro:
         end_ns = min(self.duration_ns, last_meaningful + max_idle_ns)
         return self.copy_with(events=[event for event in events if event.timestamp_ns <= end_ns]).normalized()
 
+    def trim_leading_idle(self, max_idle_ns: int = 50_000_000) -> "Macro":
+        """Drop dead time before the first meaningful action.
+
+        The first event is often just the recorded cursor anchor; this removes
+        the gap between it and the first real input so playback starts promptly.
+        """
+        events = self.sorted_events()
+        if len(events) < 2:
+            return self.copy_with(events=events).normalized()
+        # Find the first event that carries real intent (not the anchor move).
+        first_real = next(
+            (e for e in events if not (e.kind == "mouse" and e.action == "move")),
+            events[0],
+        )
+        cut = max(0, first_real.timestamp_ns - max_idle_ns)
+        if cut <= 0:
+            return self.copy_with(events=events).normalized()
+        shifted = [e.shifted(-cut) if e.timestamp_ns >= cut else e._with(timestamp_ns=0) for e in events]
+        return self.copy_with(events=shifted).normalized()
+
     def trim_range(self, start_ns: int, end_ns: int) -> "Macro":
         if start_ns < 0 or end_ns < start_ns:
             raise ValueError("Invalid trim range")
@@ -111,6 +131,44 @@ class Macro:
         ]
         shifted.insert(index, wait)
         return self.copy_with(events=shifted).normalized()
+
+    def insert_event(self, index: int, event: MacroEvent) -> "Macro":
+        """Insert a generic point event before ``index`` at that position's time.
+
+        Used by the editor's "insert any event" tools. Like :meth:`insert_image`
+        it adds no fixed duration, so later events keep their timestamps.
+        """
+        events = self.sorted_events()
+        index = max(0, min(index, len(events)))
+        at_ns = events[index].timestamp_ns if index < len(events) else self.duration_ns
+        events.insert(index, event._with(timestamp_ns=at_ns))
+        return self.copy_with(events=events).normalized()
+
+    def duplicate_indices(self, indices: set[int] | list[int]) -> "Macro":
+        """Insert a copy of each selected event right after it."""
+        wanted = {i for i in indices}
+        events = self.sorted_events()
+        result: list[MacroEvent] = []
+        for idx, event in enumerate(events):
+            result.append(event)
+            if idx in wanted:
+                result.append(event._with())  # a distinct copy at the same time
+        return self.copy_with(events=result).normalized()
+
+    def move_index(self, index: int, direction: int) -> "Macro":
+        """Move the event at ``index`` up (-1) or down (+1) by swapping timestamps.
+
+        The timeline is timestamp-ordered, so reordering means swapping this
+        event's time with its neighbour's; a no-op at the ends.
+        """
+        events = self.sorted_events()
+        target = index + direction
+        if not (0 <= index < len(events)) or not (0 <= target < len(events)):
+            return self.copy_with(events=events)
+        a, b = events[index], events[target]
+        events[index] = a._with(timestamp_ns=b.timestamp_ns)
+        events[target] = b._with(timestamp_ns=a.timestamp_ns)
+        return self.copy_with(events=events).normalized()
 
     def insert_image(self, index: int, event: MacroEvent) -> "Macro":
         """Insert a prebuilt ``image`` step before ``index``.

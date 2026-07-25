@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QSpinBox,
     QTreeWidget,
@@ -22,6 +23,7 @@ from PyQt6.QtWidgets import (
 
 from tinymacro.core.events import MacroEvent
 from tinymacro.core.macro import Macro
+from tinymacro.gui.event_dialog import EventDialog
 from tinymacro.gui.icons import get_icon
 from tinymacro.gui.image_step_dialog import ImageStepDialog
 from tinymacro.gui.theme import icon_color
@@ -29,6 +31,7 @@ from tinymacro.gui.theme import icon_color
 
 class EditorDialog(QDialog):
     macro_changed = pyqtSignal(object)
+    run_from_requested = pyqtSignal(int)  # play the saved macro from this index
 
     def __init__(self, macro: Macro, parent=None, colors=None) -> None:
         super().__init__(parent)
@@ -39,6 +42,8 @@ class EditorDialog(QDialog):
         self._history: list[Macro] = []
         self._redo: list[Macro] = []
         self._filter = ""
+        self._clipboard: list[MacroEvent] = []
+        self._pending_run_index: int | None = None
 
         self.info = QLabel()
         self.search = QLineEdit()
@@ -55,6 +60,8 @@ class EditorDialog(QDialog):
         self.tree.setExpandsOnDoubleClick(False)
         self.tree.itemDoubleClicked.connect(self._on_double_click)
         self.tree.setIconSize(QSize(40, 26))
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._show_context_menu)
 
         # Row 1 of tools: structural edits.
         color = icon_color()
@@ -81,6 +88,8 @@ class EditorDialog(QDialog):
         self.wait_jitter.setPrefix("± ")
         self.wait_jitter.setSuffix(" ms")
         self.insert_wait_button = QPushButton(get_icon("wait", color), "Insert Wait")
+        self.insert_event_button = QPushButton(get_icon("add", color), "Insert Event")
+        self.insert_event_button.setToolTip("Insert a key, mouse, or wheel event by hand")
         self.insert_image_button = QPushButton(get_icon("image", color), "Click-Image")
         self.insert_image_button.setToolTip("Insert a step that finds an image on screen and clicks it")
 
@@ -105,6 +114,7 @@ class EditorDialog(QDialog):
         tools2.addWidget(self.wait_ms)
         tools2.addWidget(self.wait_jitter)
         tools2.addWidget(self.insert_wait_button)
+        tools2.addWidget(self.insert_event_button)
         tools2.addWidget(self.insert_image_button)
         tools2.addStretch(1)
 
@@ -135,6 +145,7 @@ class EditorDialog(QDialog):
         self.note_button.clicked.connect(self.edit_note)
         self.scale_button.clicked.connect(self.scale_timing)
         self.insert_wait_button.clicked.connect(self.insert_wait)
+        self.insert_event_button.clicked.connect(self.insert_event_step)
         self.insert_image_button.clicked.connect(self.insert_image_step)
         self._populate()
 
@@ -347,14 +358,92 @@ class EditorDialog(QDialog):
             return
         self._apply(self.macro.replace_event(index, dialog.build_event(event.timestamp_ns)))
 
+    def insert_event_step(self) -> None:
+        dialog = EventDialog(parent=self)
+        if not dialog.exec():
+            return
+        indices = self._selected_source_indices()
+        at = indices[0] if indices else len(self.macro.sorted_events())
+        self._apply(self.macro.insert_event(at, dialog.build_event()))
+
+    def edit_event(self, index: int) -> None:
+        event = self.macro.sorted_events()[index]
+        dialog = EventDialog(event=event, parent=self)
+        if not dialog.exec():
+            return
+        self._apply(self.macro.replace_event(index, dialog.build_event(event.timestamp_ns)))
+
+    # -- clipboard / reorder --------------------------------------------------
+    def duplicate_selected(self) -> None:
+        indices = self._selected_source_indices()
+        if indices:
+            self._apply(self.macro.duplicate_indices(indices))
+
+    def copy_selected(self) -> None:
+        events = self.macro.sorted_events()
+        self._clipboard = [events[i] for i in self._selected_source_indices()]
+
+    def paste_events(self) -> None:
+        if not self._clipboard:
+            return
+        indices = self._selected_source_indices()
+        at = (indices[0] + 1) if indices else len(self.macro.sorted_events())
+        macro = self.macro
+        # Insert in order so the pasted block keeps its original sequence.
+        for offset, event in enumerate(self._clipboard):
+            macro = macro.insert_event(at + offset, event._with())
+        self._apply(macro)
+
+    def move_selected(self, direction: int) -> None:
+        indices = self._selected_source_indices()
+        if len(indices) != 1:
+            return  # single-row reorder keeps the semantics unambiguous
+        self._apply(self.macro.move_index(indices[0], direction))
+
+    def expand_all_groups(self) -> None:
+        self.tree.expandAll()
+
+    def collapse_all_groups(self) -> None:
+        self.tree.collapseAll()
+
+    # -- context menu ---------------------------------------------------------
+    def _show_context_menu(self, pos) -> None:
+        indices = self._selected_source_indices()
+        menu = QMenu(self)
+        color = icon_color()
+        if len(indices) == 1:
+            menu.addAction(get_icon("note", color), "Edit…", lambda: self._edit_index(indices[0]))
+            menu.addAction(get_icon("play", color), "Run from here", lambda: self.run_from_here(indices[0]))
+        if indices:
+            menu.addAction(get_icon("add", color), "Duplicate", self.duplicate_selected)
+            menu.addAction("Copy", self.copy_selected)
+        if self._clipboard:
+            menu.addAction("Paste", self.paste_events)
+        if len(indices) == 1:
+            menu.addSeparator()
+            menu.addAction("Move Up", lambda: self.move_selected(-1))
+            menu.addAction("Move Down", lambda: self.move_selected(1))
+        if indices:
+            menu.addSeparator()
+            menu.addAction(get_icon("trash", color), "Delete", self.delete_selected)
+        menu.addSeparator()
+        menu.addAction("Expand All", self.expand_all_groups)
+        menu.addAction("Collapse All", self.collapse_all_groups)
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _edit_index(self, index: int) -> None:
+        event = self.macro.sorted_events()[index]
+        if event.kind == "image":
+            self.edit_image_step(index)
+        elif event.kind in ("key", "mouse", "wheel"):
+            self.edit_event(index)
+        else:
+            self.edit_note()
+
     def _on_double_click(self, item, _column: int = 0) -> None:
         data = item.data(0, Qt.ItemDataRole.UserRole)
         if isinstance(data, int):
-            event = self.macro.sorted_events()[data]
-            if event.kind == "image":
-                self.edit_image_step(data)
-                return
-        self.edit_note()
+            self._edit_index(data)
 
     def edit_note(self) -> None:
         indices = self._selected_source_indices()
@@ -366,8 +455,15 @@ class EditorDialog(QDialog):
         if ok:
             self._apply(self.macro.set_note(index, text))
 
+    def run_from_here(self, index: int) -> None:
+        """Save and ask the main window to play from the selected step."""
+        self._pending_run_index = index
+        self.accept()
+
     def accept(self) -> None:
         self.macro_changed.emit(self.macro)
+        if self._pending_run_index is not None:
+            self.run_from_requested.emit(self._pending_run_index)
         super().accept()
 
 
