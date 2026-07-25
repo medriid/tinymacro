@@ -24,6 +24,26 @@ APP_SVG = ICON_DIR / "app" / "app.svg"
 
 # Each entry is a 24x24 solid-filled glyph. `{color}` is substituted per render.
 _ICONS: dict[str, str] = {
+    # -- window chrome (frameless title bar) ----------------------------------
+    "win_min": '<rect x="5" y="11" width="14" height="2.2" rx="1" fill="{color}"/>',
+    "win_max": '<rect x="5.5" y="5.5" width="13" height="13" rx="2" fill="none" '
+               'stroke="{color}" stroke-width="2"/>',
+    "win_restore": '<rect x="7.5" y="7.5" width="11" height="11" rx="2" fill="none" '
+                   'stroke="{color}" stroke-width="2"/>'
+                   '<path d="M7.5 7.5V6a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-1.5" '
+                   'fill="none" stroke="{color}" stroke-width="2"/>',
+    "win_close": '<path d="M6 6l12 12M18 6L6 18" stroke="{color}" stroke-width="2.2" '
+                 'stroke-linecap="round"/>',
+    # -- studio / docking -----------------------------------------------------
+    "dock": '<rect x="3.5" y="5" width="17" height="14" rx="2.5" fill="none" '
+            'stroke="{color}" stroke-width="1.8"/>'
+            '<rect x="6.5" y="8" width="11" height="8" rx="1.5" fill="{color}" opacity="0.55"/>',
+    "overview": '<rect x="4" y="4.5" width="7" height="7" rx="1.5" fill="{color}"/>'
+                '<rect x="13" y="4.5" width="7" height="7" rx="1.5" fill="{color}" opacity="0.55"/>'
+                '<rect x="4" y="13.5" width="7" height="6" rx="1.5" fill="{color}" opacity="0.55"/>'
+                '<rect x="13" y="13.5" width="7" height="6" rx="1.5" fill="{color}"/>',
+    "switch": '<path d="M7 8h9l-2.5-2.5M17 16H8l2.5 2.5" fill="none" stroke="{color}" '
+              'stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>',
     # -- transport / recording ------------------------------------------------
     "record": '<circle cx="12" cy="12" r="7" fill="{color}"/>',
     "play": '<path d="M8 5.5v13l11-6.5z" fill="{color}"/>',

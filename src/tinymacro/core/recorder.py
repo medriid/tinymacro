@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import time
 
 from tinymacro.backends.base import InputBackend
+from tinymacro.core.dock import DockRegion, to_relative
 from tinymacro.core.events import MacroEvent
 from tinymacro.core.hotkeys import HotkeySet, normalize_key_name
 from tinymacro.core.macro import Macro
@@ -19,6 +20,10 @@ class Recorder:
     # Minimum spacing between consecutive recorded mouse-move events. 0 keeps
     # every sample; a larger value thins dense motion to shrink macros.
     move_min_interval_ns: int = 0
+    # When set (Studio docked mode), captured absolute pointer coordinates are
+    # also stored as fractions of the returned DockRegion so the macro is
+    # resolution-independent. None keeps classic absolute-only recording.
+    dock_region_provider: Callable[[], "DockRegion | None"] | None = None
 
     _recording: bool = False
     _paused: bool = False
@@ -131,6 +136,11 @@ class Recorder:
                 return
             self._last_move_ns = offset
         x, y = self._coordinates_for(event)
+        fx = fy = None
+        if x is not None and y is not None and self.dock_region_provider is not None:
+            region = self.dock_region_provider()
+            if region is not None and region.valid:
+                fx, fy = to_relative(x, y, region)
         self._events.append(
             MacroEvent(
                 timestamp_ns=offset,
@@ -142,6 +152,8 @@ class Recorder:
                 y=y,
                 dx=event.dx,
                 dy=event.dy,
+                fx=fx,
+                fy=fy,
             )
         )
 

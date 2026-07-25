@@ -143,6 +143,25 @@ class POINT(ctypes.Structure):
     _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
 
 
+class RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", wintypes.LONG),
+        ("top", wintypes.LONG),
+        ("right", wintypes.LONG),
+        ("bottom", wintypes.LONG),
+    ]
+
+
+WNDENUMPROC = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)(
+    wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
+)
+
+GWL_EXSTYLE = -20
+WS_EX_TOOLWINDOW = 0x00000080
+SWP_NOZORDER = 0x0004
+SWP_NOACTIVATE = 0x0010
+
+
 class KBDLLHOOKSTRUCT(ctypes.Structure):
     _fields_ = [
         ("vkCode", wintypes.DWORD),
@@ -355,6 +374,23 @@ class WindowsBackend(InputBackend):
         self.user32.AttachThreadInput.restype = wintypes.BOOL
         self.user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
         self.user32.ShowWindow.restype = wintypes.BOOL
+        self.user32.EnumWindows.argtypes = [WNDENUMPROC, wintypes.LPARAM]
+        self.user32.EnumWindows.restype = wintypes.BOOL
+        self.user32.IsWindowVisible.argtypes = [wintypes.HWND]
+        self.user32.IsWindowVisible.restype = wintypes.BOOL
+        self.user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
+        self.user32.GetWindowRect.restype = wintypes.BOOL
+        self.user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
+        self.user32.GetClientRect.restype = wintypes.BOOL
+        self.user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(POINT)]
+        self.user32.ClientToScreen.restype = wintypes.BOOL
+        self.user32.SetWindowPos.argtypes = [
+            wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+            ctypes.c_int, ctypes.c_int, wintypes.UINT,
+        ]
+        self.user32.SetWindowPos.restype = wintypes.BOOL
+        self.user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+        self.user32.GetWindowLongW.restype = wintypes.LONG
         self.kernel32.GetCurrentThreadId.restype = wintypes.DWORD
         self.kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
         self.kernel32.GetModuleHandleW.restype = wintypes.HMODULE
@@ -409,6 +445,77 @@ class WindowsBackend(InputBackend):
         finally:
             if attached:
                 self.user32.AttachThreadInput(current_thread, target_thread, False)
+
+    # -- window docking -------------------------------------------------------
+    def supports_docking(self) -> bool:
+        return True
+
+    def list_windows(self) -> list[tuple[int, str]]:
+        results: list[tuple[int, str]] = []
+        own_pid = os.getpid()
+
+        def callback(hwnd, _lparam):
+            if not self.user32.IsWindowVisible(hwnd):
+                return True
+            ex_style = self.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            if ex_style & WS_EX_TOOLWINDOW:
+                return True  # skip tool/utility windows
+            length = self.user32.GetWindowTextLengthW(hwnd)
+            if length <= 0:
+                return True
+            buffer = ctypes.create_unicode_buffer(length + 1)
+            self.user32.GetWindowTextW(hwnd, buffer, length + 1)
+            title = buffer.value
+            if not title:
+                return True
+            pid = wintypes.DWORD(0)
+            self.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value == own_pid:
+                return True  # never list our own windows
+            results.append((int(hwnd), title))
+            return True
+
+        self.user32.EnumWindows(WNDENUMPROC(callback), 0)
+        return results
+
+    def window_client_rect(self, handle: int) -> tuple[int, int, int, int] | None:
+        hwnd = wintypes.HWND(handle)
+        client = RECT()
+        if not self.user32.GetClientRect(hwnd, ctypes.byref(client)):
+            return None
+        origin = POINT(0, 0)
+        if not self.user32.ClientToScreen(hwnd, ctypes.byref(origin)):
+            return None
+        width = client.right - client.left
+        height = client.bottom - client.top
+        return (int(origin.x), int(origin.y), int(width), int(height))
+
+    def move_resize_window(self, handle: int, left: int, top: int, width: int, height: int) -> bool:
+        """Size the window so its *client area* fills (left, top, width, height).
+
+        SetWindowPos works on the whole window rect, so we add the non-client
+        borders (title bar / frame) computed from the current window vs client
+        rects.
+        """
+        hwnd = wintypes.HWND(handle)
+        window = RECT()
+        client = RECT()
+        if not self.user32.GetWindowRect(hwnd, ctypes.byref(window)):
+            return False
+        if not self.user32.GetClientRect(hwnd, ctypes.byref(client)):
+            return False
+        client_origin = POINT(0, 0)
+        self.user32.ClientToScreen(hwnd, ctypes.byref(client_origin))
+        border_left = client_origin.x - window.left
+        border_top = client_origin.y - window.top
+        extra_w = (window.right - window.left) - (client.right - client.left)
+        extra_h = (window.bottom - window.top) - (client.bottom - client.top)
+        return bool(
+            self.user32.SetWindowPos(
+                hwnd, None, left - border_left, top - border_top,
+                width + extra_w, height + extra_h, SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        )
 
     def _stop_hook_thread(self) -> None:
         with self._lock:

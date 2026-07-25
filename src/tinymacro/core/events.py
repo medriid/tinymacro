@@ -82,6 +82,10 @@ class MacroEvent:
     command: str = ""
     # Repeat count for ``loop`` steps (0 = infinite until stopped).
     count: int = 0
+    # Normalised (0..1) pointer coordinates relative to the docked window, used by
+    # the Studio UI so macros replay at any resolution. Absent on classic macros.
+    fx: float | None = None
+    fy: float | None = None
 
     # -- construction helpers -------------------------------------------------
     @classmethod
@@ -282,6 +286,8 @@ class MacroEvent:
             region=self.region,
             command=self.command,
             count=self.count,
+            fx=self.fx,
+            fy=self.fy,
         )
         base.update(changes)
         return MacroEvent(**base)
@@ -368,6 +374,10 @@ class MacroEvent:
                 data["confidence"] = self.confidence
         if self.kind == "loop":
             data["count"] = self.count
+        # Relative Studio coordinates, emitted only when captured.
+        if self.fx is not None and self.fy is not None:
+            data["fx"] = self.fx
+            data["fy"] = self.fy
         return data
 
     @classmethod
@@ -407,7 +417,18 @@ class MacroEvent:
             region=region,  # type: ignore[arg-type]
             command=str(data.get("command", "")),
             count=int(data.get("count", 0)),
+            fx=_opt_float(data.get("fx")),
+            fy=_opt_float(data.get("fy")),
         )
+
+
+def _opt_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def _legacy_mouse_button_from_key(key: object) -> str | None:

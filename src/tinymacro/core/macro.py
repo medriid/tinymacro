@@ -17,6 +17,14 @@ from .events import MacroEvent
 FORMAT_VERSION = 4
 NANOSECONDS_PER_SECOND = 1_000_000_000
 
+# Classic macros use absolute screen coordinates and the ".tmacro" extension.
+# Studio (docked) macros store window-relative coordinates and use ".tmacd";
+# the two are intentionally not interchangeable between the UI variants.
+CLASSIC_FORMAT = "tiny-macro"
+DOCK_FORMAT = "tiny-macro-dock"
+CLASSIC_EXTENSION = ".tmacro"
+DOCK_EXTENSION = ".tmacd"
+
 
 @dataclass(slots=True)
 class Macro:
@@ -31,6 +39,9 @@ class Macro:
     # Per-macro playback preferences, restored when the macro is opened.
     speed: float = 1.0
     loop_count: int = 1
+    # Studio (docked) macros: relative coordinates + the target-window hint.
+    docked: bool = False
+    target_window: str = ""
 
     # -- timing ---------------------------------------------------------------
     @property
@@ -269,6 +280,8 @@ class Macro:
             "description": self.description,
             "speed": self.speed,
             "loop_count": self.loop_count,
+            "docked": self.docked,
+            "target_window": self.target_window,
         }
         data.update(changes)
         if "tags" in data:
@@ -278,7 +291,7 @@ class Macro:
     # -- serialization --------------------------------------------------------
     def to_dict(self) -> dict[str, Any]:
         return {
-            "format": "tiny-macro",
+            "format": DOCK_FORMAT if self.docked else CLASSIC_FORMAT,
             "version": FORMAT_VERSION,
             "created_at": self.created_at,
             "name": self.name,
@@ -294,13 +307,16 @@ class Macro:
                 "wait_event_count": self.wait_event_count(),
                 "speed": self.speed,
                 "loop_count": self.loop_count,
+                "docked": self.docked,
+                "target_window": self.target_window,
             },
             "events": [event.to_dict() for event in self.sorted_events()],
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Macro":
-        if data.get("format") != "tiny-macro":
+        fmt = data.get("format")
+        if fmt not in (CLASSIC_FORMAT, DOCK_FORMAT):
             raise ValueError("Not a tiny-macro file")
         if int(data.get("version", 0)) > FORMAT_VERSION:
             raise ValueError("Macro file was created by a newer version")
@@ -318,6 +334,8 @@ class Macro:
             description=str(data.get("description", "")),
             speed=float(metadata.get("speed", 1.0)),
             loop_count=int(metadata.get("loop_count", 1)),
+            docked=bool(metadata.get("docked", fmt == DOCK_FORMAT)),
+            target_window=str(metadata.get("target_window", "")),
         ).normalized()
 
     def save(self, path: str | Path) -> None:
@@ -326,3 +344,18 @@ class Macro:
     @classmethod
     def load(cls, path: str | Path) -> "Macro":
         return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+
+    @classmethod
+    def load_for_variant(cls, path: str | Path, docked: bool) -> "Macro":
+        """Load a macro, rejecting it if it doesn't match the UI variant.
+
+        Studio (docked) and classic macros are intentionally incompatible: a
+        ``.tmacd`` won't open in the classic UI and a ``.tmacro`` won't open in
+        Studio, because their coordinates mean different things.
+        """
+        macro = cls.load(path)
+        if macro.docked != docked:
+            wanted = "Studio (.tmacd)" if docked else "classic (.tmacro)"
+            got = "Studio (.tmacd)" if macro.docked else "classic (.tmacro)"
+            raise ValueError(f"This is a {got} macro; the current UI needs a {wanted} macro.")
+        return macro

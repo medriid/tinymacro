@@ -57,6 +57,23 @@ class InputBackend(ABC):
         """Best-effort: give keyboard focus to ``handle`` before playback."""
         return False
 
+    # -- window docking (Studio UI); Windows-first, no-op elsewhere -----------
+    def supports_docking(self) -> bool:
+        """True if this backend can enumerate/move windows for docked mode."""
+        return False
+
+    def list_windows(self) -> list[tuple[int, str]]:
+        """Return (handle, title) for visible, titled top-level windows."""
+        return []
+
+    def window_client_rect(self, handle: int) -> tuple[int, int, int, int] | None:
+        """Return the window's client area as (left, top, width, height) in screen px."""
+        return None
+
+    def move_resize_window(self, handle: int, left: int, top: int, width: int, height: int) -> bool:
+        """Position + size ``handle`` so its client area fills the given rect."""
+        return False
+
     def close(self) -> None:
         self.stop_capture()
         self.stop_hotkeys()

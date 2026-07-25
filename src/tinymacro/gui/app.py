@@ -13,6 +13,7 @@ from tinymacro.core.profiles import ProfileStore
 from tinymacro.core.scheduler import ScheduleStore
 from tinymacro.gui.icons import app_icon
 from tinymacro.gui.main_window import MainWindow
+from tinymacro.gui.studio_window import StudioWindow
 from tinymacro.gui.theme import apply_theme
 
 
@@ -40,16 +41,32 @@ def run_app(initial_macro: Path | None = None, backend_name: str = "auto") -> in
         QMessageBox.critical(None, "Backend unavailable", str(exc))
         return 2
 
-    window = MainWindow(
-        settings,
-        backend,
-        initial_macro,
-        persist_settings=True,
-        library=library,
-        schedules=schedules,
-        colors=colors,
-        # The active profile is what gets written back on save/close.
-        on_persist=profiles.save,
-    )
-    window.show()
+    state: dict[str, object] = {"window": None}
+
+    def build(variant: str, macro: Path | None):
+        if variant == "studio":
+            window = StudioWindow(
+                settings, backend, persist_settings=True, library=library,
+                colors=colors, on_persist=profiles.save,
+            )
+        else:
+            window = MainWindow(
+                settings, backend, macro, persist_settings=True, library=library,
+                schedules=schedules, colors=colors, on_persist=profiles.save,
+            )
+        window.switch_variant_requested.connect(switch)
+        return window
+
+    def switch(variant: str) -> None:
+        old = state["window"]
+        new = build(variant, None)
+        state["window"] = new
+        new.show()
+        if old is not None:
+            # Keep the shared backend alive across the swap; the old window fades out.
+            old._keep_backend = True  # type: ignore[attr-defined]
+            old.close()
+
+    state["window"] = build(settings.ui_variant, initial_macro)
+    state["window"].show()  # type: ignore[union-attr]
     return app.exec()

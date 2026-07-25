@@ -43,6 +43,7 @@ from tinymacro.core.settings import Settings
 from tinymacro.core.vision import CAPTURE_AVAILABLE, Locator
 from tinymacro.desktop import install_file_association
 from tinymacro.export import export_runner
+from tinymacro.gui.framed_window import FramelessWindow
 from tinymacro.gui.editor import EditorDialog
 from tinymacro.gui.icons import app_icon, get_icon
 from tinymacro.gui.library_dialog import LibraryDialog
@@ -68,7 +69,9 @@ class PlaybackSignalBridge(QObject):
     image_trigger = pyqtSignal(object)  # fired by the ImageWatcher thread
 
 
-class MainWindow(QMainWindow):
+class MainWindow(FramelessWindow):
+    switch_variant_requested = pyqtSignal(str)
+
     def __init__(
         self,
         settings: Settings,
@@ -80,7 +83,7 @@ class MainWindow(QMainWindow):
         colors=None,
         on_persist=None,
     ) -> None:
-        super().__init__()
+        super().__init__("Tiny Macro", with_menu=True, animated=settings.animations)
         self.settings = settings
         self.backend = backend
         self.persist_settings = persist_settings
@@ -141,8 +144,10 @@ class MainWindow(QMainWindow):
         # Last non-Tiny-Macro window to hold focus, so keyboard playback can be
         # directed back to the user's target window instead of at our own window.
         self._last_external_hwnd = 0
+        self._cleaned = False
+        self._keep_backend = False  # set true on a variant switch to share the backend
 
-        self.setWindowTitle("Tiny Macro")
+        self.set_window_title("Tiny Macro")
         self.setWindowIcon(app_icon())
         self.setMinimumWidth(480)
         self.toasts = ToastManager(self, animated=settings.animations)
@@ -289,7 +294,7 @@ class MainWindow(QMainWindow):
         self.top_action.triggered.connect(self.toggle_always_on_top)
 
     def _build_menu(self) -> None:
-        file_menu = self.menuBar().addMenu("File")
+        file_menu = self.menu_bar().addMenu("File")
         self._menu_action(file_menu, "open", "Open", self.open_macro)
         self._menu_action(file_menu, "save", "Save", self.save_macro)
         self._menu_action(file_menu, "save", "Save As", self.save_macro_as)
@@ -298,19 +303,26 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         self._menu_action(file_menu, "close", "Quit", self.close)
 
-        edit_menu = self.menuBar().addMenu("Edit")
+        edit_menu = self.menu_bar().addMenu("Edit")
         self._menu_action(edit_menu, "editor", "Macro Editor", self.open_editor)
         self._menu_action(edit_menu, "preferences", "Preferences", self.open_preferences)
 
-        tools_menu = self.menuBar().addMenu("Tools")
+        tools_menu = self.menu_bar().addMenu("Tools")
         self._menu_action(tools_menu, "library", "Macro Library", self.open_library)
         self._menu_action(tools_menu, "scheduler", "Scheduler", self.open_scheduler)
         self._menu_action(tools_menu, "validate", "Validate (dry run)", self.validate_macro)
         self._menu_action(tools_menu, "note", "Drop Marker (while recording)", self.drop_marker)
         self._menu_action(tools_menu, "logs", "Log Viewer", self.open_logs)
 
-        view_menu = self.menuBar().addMenu("View")
+        view_menu = self.menu_bar().addMenu("View")
         self._menu_action(view_menu, "chevron_down", "Toggle compact / expanded", self.toggle_mode)
+        view_menu.addSeparator()
+        self._menu_action(view_menu, "switch", "Switch to Studio UI", self._go_studio)
+
+    def _go_studio(self) -> None:
+        self.settings.ui_variant = "studio"
+        self._persist()
+        self.switch_variant_requested.emit("studio")
 
     def _build_tray(self) -> None:
         self.tray: QSystemTrayIcon | None = None
@@ -974,7 +986,7 @@ class MainWindow(QMainWindow):
             title += f" - {self.path.name}"
         if self.dirty:
             title += " *"
-        self.setWindowTitle(title)
+        self.set_window_title(title)
         if playing:
             loops = "inf" if self.loop_spin.value() == 0 else str(self.loop_spin.value())
             paused = " (paused)" if self.player.state.paused else ""
@@ -1013,17 +1025,24 @@ class MainWindow(QMainWindow):
             self.toasts._current._reposition()
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        if not self._confirm_discard():
-            event.ignore()
-            return
-        self.player.stop(wait=True)
-        self._image_watcher.stop()
-        self.backend.close()
-        if self.tray:
-            self.tray.hide()
-        self._persist()
-        self.log.info("Tiny Macro closed")
-        event.accept()
+        if not self._closing:
+            if not self._keep_backend and not self._confirm_discard():
+                event.ignore()
+                return
+            if not self._cleaned:
+                self._cleaned = True
+                self.player.stop(wait=True)
+                if self.recorder.recording:
+                    self.recorder.stop()
+                self._image_watcher.stop()
+                if not self._keep_backend:
+                    self.backend.close()
+                if self.tray:
+                    self.tray.hide()
+                self._persist()
+                self.log.info("Tiny Macro closed")
+        # Delegate to the frameless base for the close animation + final accept.
+        super().closeEvent(event)
 
     def _confirm_discard(self) -> bool:
         if not self.dirty:

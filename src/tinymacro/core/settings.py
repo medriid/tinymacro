@@ -37,6 +37,7 @@ class Settings:
     tray_enabled: bool = True
     ui_scale: float = 1.0  # font/scale multiplier for accessibility
     density: str = "comfortable"  # "comfortable" | "compact" control padding
+    ui_variant: str = "classic"  # "classic" toolbar UI or "studio" docked UI
     # Capture / playback tuning
     move_min_interval_ms: int = 0
     humanize_jitter_ms: int = 0
@@ -82,6 +83,8 @@ class Settings:
             raise ValueError("UI scale must be between 0.5 and 2.0")
         if self.density not in ("comfortable", "compact"):
             raise ValueError("Density must be 'comfortable' or 'compact'")
+        if self.ui_variant not in ("classic", "studio"):
+            raise ValueError("UI variant must be 'classic' or 'studio'")
         if self.autosave_seconds < 0:
             raise ValueError("Autosave interval must be zero or positive")
         self.hotkeys.validate()
@@ -104,6 +107,7 @@ class Settings:
             "tray_enabled": self.tray_enabled,
             "ui_scale": self.ui_scale,
             "density": self.density,
+            "ui_variant": self.ui_variant,
             "move_min_interval_ms": self.move_min_interval_ms,
             "humanize_jitter_ms": self.humanize_jitter_ms,
             "record_countdown": self.record_countdown,
@@ -132,6 +136,7 @@ class Settings:
             tray_enabled=bool(data.get("tray_enabled", True)),
             ui_scale=float(data.get("ui_scale", 1.0)),
             density=str(data.get("density", "comfortable")),
+            ui_variant=str(data.get("ui_variant", "classic")),
             move_min_interval_ms=int(data.get("move_min_interval_ms", 0)),
             humanize_jitter_ms=int(data.get("humanize_jitter_ms", 0)),
             record_countdown=int(data.get("record_countdown", 0)),

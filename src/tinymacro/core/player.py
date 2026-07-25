@@ -9,6 +9,7 @@ import time
 from typing import TYPE_CHECKING
 
 from tinymacro.backends.base import InputBackend
+from tinymacro.core.dock import DockRegion, to_absolute
 from tinymacro.core.events import DEFAULT_CONFIDENCE, MacroEvent
 from tinymacro.core.macro import Macro
 
@@ -190,6 +191,10 @@ class Player:
     on_image_missed: Callable[[MacroEvent], None] | None = None
     # Gate for ``run`` steps (shell/Python). Off unless the host opts in.
     allow_code_execution: bool = False
+    # When set (Studio docked mode), mouse events carrying fx/fy have their
+    # absolute x/y recomputed from the current DockRegion right before emitting,
+    # so playback follows the docked window wherever it now sits.
+    dock_region_provider: Callable[[], "DockRegion | None"] | None = None
     rng: random.Random = field(default_factory=random.Random)
 
     state: PlaybackState = field(default_factory=PlaybackState)
@@ -246,7 +251,7 @@ class Player:
             raise IndexError("Event index out of range")
         event = events[index]
         if event.is_input:
-            self.backend.emit(event)
+            self.backend.emit(self._resolve_coords(event))
             self.state.emitted_events += 1
         self.state.current_index = index
         return event
@@ -283,13 +288,23 @@ class Player:
             self.state.playing = False
             self.state.paused = False
 
+    def _resolve_coords(self, event: MacroEvent) -> MacroEvent:
+        """In docked mode, recompute absolute x/y from the event's fx/fy."""
+        if event.fx is None or event.fy is None or self.dock_region_provider is None:
+            return event
+        region = self.dock_region_provider()
+        if region is None or not region.valid:
+            return event
+        x, y = to_absolute(event.fx, event.fy, region)
+        return event._with(x=x, y=y)
+
     # -- execution paths ------------------------------------------------------
     def _execute_action(self, event: MacroEvent, locator, dry_run: bool) -> None:
         """Perform a single non-control step (emit / image / automation)."""
         if dry_run:
             return
         if event.is_input:
-            self.backend.emit(event)
+            self.backend.emit(self._resolve_coords(event))
             self.state.emitted_events += 1
         elif event.kind == "image":
             self._run_image_event(event, locator)
