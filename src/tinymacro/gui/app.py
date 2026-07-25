@@ -43,16 +43,19 @@ def run_app(initial_macro: Path | None = None, backend_name: str = "auto") -> in
 
     state: dict[str, object] = {"window": None}
 
+    def persist_profiles() -> None:
+        profiles.save()
+
     def build(variant: str, macro: Path | None):
         if variant == "studio":
             window = StudioWindow(
                 settings, backend, persist_settings=True, library=library,
-                colors=colors, on_persist=profiles.save,
+                colors=colors, on_persist=persist_profiles,
             )
         else:
             window = MainWindow(
                 settings, backend, macro, persist_settings=True, library=library,
-                schedules=schedules, colors=colors, on_persist=profiles.save,
+                schedules=schedules, colors=colors, on_persist=persist_profiles,
             )
         window.switch_variant_requested.connect(switch)
         return window

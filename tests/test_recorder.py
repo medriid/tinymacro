@@ -34,9 +34,12 @@ def test_recorder_filters_control_keys_and_skips_final_click():
 
     macro = recorder.stop()
 
-    assert len(macro.events) == 1
-    assert macro.events[0].key == "a"
-    assert macro.events[0].timestamp_ns == 0
+    input_events = [event for event in macro.events if event.is_input]
+    assert len(input_events) == 1
+    assert input_events[0].key == "a"
+    assert input_events[0].timestamp_ns == 2_000
+    assert macro.wait_event_count() == 2
+    assert macro.duration_ns == 4_000
 
 
 def test_recorder_stores_start_position_and_accumulates_relative_mouse_motion():
@@ -62,3 +65,26 @@ def test_recorder_stores_start_position_and_accumulates_relative_mouse_motion():
     assert macro.events[2].button == "left"
     assert macro.events[2].x == 105
     assert macro.events[2].y == 197
+
+
+def test_recorder_preserves_leading_and_trailing_idle():
+    backend = FakeBackend()
+    clock = FakeClock()
+    recorder = Recorder(backend, HotkeySet(), clock_ns=clock, skip_final_click=False)
+
+    recorder.start()
+    clock.advance(2_000_000_000)
+    backend.feed(MacroEvent(0, "key", "press", key="a"))
+    clock.advance(3_000_000_000)
+    macro = recorder.stop()
+
+    events = macro.sorted_events()
+    assert events[0] == MacroEvent.wait(
+        0, 2_000_000_000, note="recorded idle before first action"
+    )
+    assert events[1].key == "a"
+    assert events[1].timestamp_ns == 2_000_000_000
+    assert events[2] == MacroEvent.wait(
+        2_000_000_000, 3_000_000_000, note="recorded idle after last action"
+    )
+    assert macro.duration_ns == 5_000_000_000

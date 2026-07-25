@@ -160,6 +160,8 @@ GWL_EXSTYLE = -20
 WS_EX_TOOLWINDOW = 0x00000080
 SWP_NOZORDER = 0x0004
 SWP_NOACTIVATE = 0x0010
+SWP_SHOWWINDOW = 0x0040
+SW_RESTORE = 9
 
 
 class KBDLLHOOKSTRUCT(ctypes.Structure):
@@ -378,6 +380,10 @@ class WindowsBackend(InputBackend):
         self.user32.EnumWindows.restype = wintypes.BOOL
         self.user32.IsWindowVisible.argtypes = [wintypes.HWND]
         self.user32.IsWindowVisible.restype = wintypes.BOOL
+        self.user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+        self.user32.GetWindowTextLengthW.restype = ctypes.c_int
+        self.user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        self.user32.GetWindowTextW.restype = ctypes.c_int
         self.user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
         self.user32.GetWindowRect.restype = wintypes.BOOL
         self.user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
@@ -491,29 +497,15 @@ class WindowsBackend(InputBackend):
         return (int(origin.x), int(origin.y), int(width), int(height))
 
     def move_resize_window(self, handle: int, left: int, top: int, width: int, height: int) -> bool:
-        """Size the window so its *client area* fills (left, top, width, height).
-
-        SetWindowPos works on the whole window rect, so we add the non-client
-        borders (title bar / frame) computed from the current window vs client
-        rects.
-        """
+        """Size the selected top-level window so it fills the Studio aperture."""
+        if width <= 0 or height <= 0:
+            return False
         hwnd = wintypes.HWND(handle)
-        window = RECT()
-        client = RECT()
-        if not self.user32.GetWindowRect(hwnd, ctypes.byref(window)):
-            return False
-        if not self.user32.GetClientRect(hwnd, ctypes.byref(client)):
-            return False
-        client_origin = POINT(0, 0)
-        self.user32.ClientToScreen(hwnd, ctypes.byref(client_origin))
-        border_left = client_origin.x - window.left
-        border_top = client_origin.y - window.top
-        extra_w = (window.right - window.left) - (client.right - client.left)
-        extra_h = (window.bottom - window.top) - (client.bottom - client.top)
+        self.user32.ShowWindow(hwnd, SW_RESTORE)
         return bool(
             self.user32.SetWindowPos(
-                hwnd, None, left - border_left, top - border_top,
-                width + extra_w, height + extra_h, SWP_NOZORDER | SWP_NOACTIVATE,
+                hwnd, None, int(left), int(top), int(width), int(height),
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
             )
         )
 

@@ -114,12 +114,17 @@ class Recorder:
     def stop(self) -> Macro:
         if not self._recording:
             return Macro(events=list(self._events), backend=self.backend.name).normalized()
+        stopped_ns = self.clock_ns()
         self.backend.stop_capture()
+        if self._paused:
+            self._paused_ns += max(0, stopped_ns - self._pause_started_ns)
+        stop_offset = max(0, stopped_ns - self._start_ns - self._paused_ns)
         self._recording = False
         self._paused = False
         events = list(self._events)
         if self.skip_final_click:
             events = self._drop_final_mouse_press_release(events)
+        events = self._preserve_idle_bookends(events, stop_offset)
         return Macro(events=events, backend=self.backend.name).normalized()
 
     def _on_event(self, event: MacroEvent) -> None:
@@ -185,3 +190,31 @@ class Recorder:
         while result and result[-1].kind == "mouse" and result[-1].action in {"press", "release"}:
             result.pop()
         return result
+
+    @staticmethod
+    def _preserve_idle_bookends(events: list[MacroEvent], stop_offset_ns: int) -> list[MacroEvent]:
+        """Add explicit waits for quiet time before first input and after last input."""
+        stop_offset_ns = max(0, int(stop_offset_ns))
+        if not events:
+            return [MacroEvent.wait(0, stop_offset_ns, note="recorded idle")] if stop_offset_ns else []
+        result = sorted(events, key=lambda event: event.timestamp_ns)
+        first_ns = max(0, result[0].timestamp_ns)
+        if first_ns > 0:
+            result.insert(0, MacroEvent.wait(0, first_ns, note="recorded idle before first action"))
+        last_end_ns = max(_event_end_ns(event) for event in result)
+        if stop_offset_ns > last_end_ns:
+            result.append(
+                MacroEvent.wait(
+                    last_end_ns,
+                    stop_offset_ns - last_end_ns,
+                    note="recorded idle after last action",
+                )
+            )
+        return result
+
+
+def _event_end_ns(event: MacroEvent) -> int:
+    end = event.timestamp_ns
+    if event.kind == "wait":
+        end += event.duration_ns + event.jitter_ns
+    return end

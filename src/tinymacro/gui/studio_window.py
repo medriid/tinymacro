@@ -1,9 +1,10 @@
 """The "Studio" UI variant: a wide frameless frame that docks a target window.
 
-Left column = overview + logs, center = a 16:9 dock area that a selected window
-is position-attached into, right column = macro options. Everything recorded here
-is stored relative to the dock area (see :mod:`tinymacro.core.dock`) so the macro
-replays at any resolution and can be distributed as a ``.tmacd`` file.
+Left column = overview + logs, center = a recessed dock area that a selected
+window is position-attached into, right column = macro options. Everything
+recorded here is stored relative to the dock area (see
+:mod:`tinymacro.core.dock`) so the macro replays at any resolution and can be
+distributed as a ``.tmacd`` file.
 """
 from __future__ import annotations
 
@@ -50,34 +51,41 @@ class _Bridge(QObject):
 
 
 class DockArea(QWidget):
-    """Holds a 16:9 inner frame (the docking target) centered in the column."""
+    """Holds the recessed docking aperture."""
 
     def __init__(self, on_select) -> None:
         super().__init__()
+        self.setMinimumSize(560, 420)
         self.inner = QFrame(self)
-        self.inner.setObjectName("dockInner")
+        self.inner.setObjectName("dockWell")
+        self.inner.setFrameShape(QFrame.Shape.StyledPanel)
+        self.inner.setFrameShadow(QFrame.Shadow.Sunken)
+        self.inner.setLineWidth(2)
+        self.inner.setMidLineWidth(1)
         self.inner.setStyleSheet(
-            "#dockInner { border: 2px dashed palette(mid); border-radius: 10px; }"
+            """
+            #dockWell {
+                background: palette(base);
+                border: 2px inset palette(mid);
+                border-radius: 6px;
+            }
+            """
         )
         self.placeholder = QLabel("No window docked", self.inner)
         self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.select_button = QPushButton(get_icon("dock", icon_color()), "Select Window…", self.inner)
+        self.select_button = QPushButton(get_icon("dock", icon_color()), "Select Window...", self.inner)
         self.select_button.clicked.connect(on_select)
         lay = QVBoxLayout(self.inner)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(8)
         lay.addStretch(1)
         lay.addWidget(self.placeholder, alignment=Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self.select_button, alignment=Qt.AlignmentFlag.AlignCenter)
         lay.addStretch(1)
 
     def resizeEvent(self, event):  # noqa: N802
-        w, h = self.width(), self.height()
-        if h <= 0:
-            return
-        if w / h > 16 / 9:
-            iw, ih = int(h * 16 / 9), h
-        else:
-            iw, ih = w, int(w * 9 / 16)
-        self.inner.setGeometry((w - iw) // 2, (h - ih) // 2, iw, ih)
+        super().resizeEvent(event)
+        self.inner.setGeometry(0, 0, self.width(), self.height())
 
     def region(self) -> DockRegion:
         top_left = self.inner.mapToGlobal(QPoint(0, 0))
@@ -85,7 +93,8 @@ class DockArea(QWidget):
 
     def set_docked(self, docked: bool) -> None:
         self.placeholder.setVisible(not docked)
-        self.select_button.setText("Change Window…" if docked else "Select Window…")
+        self.select_button.setVisible(not docked)
+        self.select_button.setText("Select Window...")
 
 
 class StudioWindow(FramelessWindow):
@@ -131,8 +140,8 @@ class StudioWindow(FramelessWindow):
         self.player.on_progress = lambda i, t: self.bridge.progress.emit(i, t)
         self.player.on_error = lambda exc: self.bridge.error.emit(str(exc))
 
-        self.setMinimumSize(960, 560)
-        self.resize(1160, 660)
+        self.setMinimumSize(1100, 620)
+        self.resize(1320, 760)
         self._build_ui()
 
         self._tracker = QTimer(self)
@@ -174,6 +183,10 @@ class StudioWindow(FramelessWindow):
 
         # RIGHT — options
         right = QVBoxLayout()
+        right.addWidget(_heading("Window"))
+        self.dock_btn = self._row_button("dock", "Dock Window", color, self._select_window)
+        right.addWidget(self.dock_btn)
+        right.addSpacing(6)
         right.addWidget(_heading("Record & Play"))
         self.record_btn = self._big_button("record", "Record", color, self.toggle_recording)
         self.play_btn = self._big_button("play", "Play", color, self.toggle_playback)
@@ -236,9 +249,12 @@ class StudioWindow(FramelessWindow):
             return
         region = self.dock.region()
         if region.valid:
-            self.backend.move_resize_window(
-                self._target_hwnd, region.left, region.top, region.width, region.height
-            )
+            try:
+                self.backend.move_resize_window(
+                    self._target_hwnd, region.left, region.top, region.width, region.height
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.log.warning("Dock tracking failed: %s", exc)
 
     def _select_window(self) -> None:
         if not self.backend.supports_docking():
@@ -349,6 +365,7 @@ class StudioWindow(FramelessWindow):
     def _update_state(self) -> None:
         recording = self.recorder.recording
         playing = self.player.state.playing
+        self.dock_btn.setText("Change Window" if self._target_hwnd is not None else "Dock Window")
         self.record_btn.setText("  Stop Rec" if recording else "  Record")
         self.play_btn.setEnabled(bool(self.macro.events) and not recording)
         self.play_btn.setText("  Stop" if playing else "  Play")
@@ -387,8 +404,13 @@ class StudioWindow(FramelessWindow):
     def _go_classic(self) -> None:
         self.settings.ui_variant = "classic"
         if self.persist_settings and self._on_persist:
-            self._on_persist(self.settings)
+            self._on_persist()
         self.switch_variant_requested.emit("classic")
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        if hasattr(self, "dock"):
+            self._track_dock()
 
     def closeEvent(self, event):  # noqa: N802
         if not self._closing and not self._cleaned:

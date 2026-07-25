@@ -1,11 +1,11 @@
 """Relative-coordinate engine for the Studio UI's docked-window mode.
 
-A :class:`DockRegion` is the on-screen rectangle of the docked target window's
-client area. Recording converts absolute pointer coordinates into fractions of
-that rectangle (0..1); playback converts them back using the region as it is at
-replay time. Because the coordinates are normalised, a macro recorded in one
-window size replays correctly at any other size or screen resolution — which is
-what makes Studio macros distributable.
+A :class:`DockRegion` is the on-screen rectangle of the Studio docking aperture.
+Recording converts absolute pointer coordinates into fractions of that rectangle
+(0..1); playback converts them back using the region as it is at replay time.
+Because the coordinates are normalised, a macro recorded in one window size
+replays correctly at any other size or screen resolution, which is what makes
+Studio macros distributable.
 
 Everything here is pure (no Qt / no OS calls) so it is trivially unit-testable.
 """
@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class DockRegion:
-    """The docked window's client rectangle, in absolute screen pixels."""
+    """The Studio docking aperture, in absolute screen pixels."""
 
     left: int
     top: int

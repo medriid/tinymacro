@@ -56,6 +56,31 @@ def test_trim_leading_idle():
     assert trimmed.duration_ns < macro.duration_ns
 
 
+def test_trim_leading_idle_shortens_recorded_wait():
+    macro = Macro(events=[
+        MacroEvent.wait(0, 2_000_000_000, note="recorded idle before first action"),
+        MacroEvent(2_000_000_000, "key", "press", key="a"),
+    ])
+    trimmed = macro.trim_leading_idle()
+    events = trimmed.sorted_events()
+    assert events[0].kind == "wait"
+    assert events[0].duration_ns == 50_000_000
+    assert events[1].timestamp_ns == 50_000_000
+    assert trimmed.duration_ns == 50_000_000
+
+
+def test_trim_trailing_idle_shortens_recorded_wait():
+    macro = Macro(events=[
+        MacroEvent(0, "key", "press", key="a"),
+        MacroEvent.wait(0, 2_000_000_000, note="recorded idle after last action"),
+    ])
+    trimmed = macro.trim_trailing_idle()
+    events = trimmed.sorted_events()
+    assert events[-1].kind == "wait"
+    assert events[-1].duration_ns == 50_000_000
+    assert trimmed.duration_ns == 50_000_000
+
+
 def test_marker_hotkey_round_trip_and_default():
     keys = HotkeySet()
     assert str(keys.marker)  # has a default binding

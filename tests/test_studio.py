@@ -36,8 +36,10 @@ def test_studio_constructs_and_dock_region(qtbot):
     win.show()
     region = win.dock.region()
     assert isinstance(region, DockRegion)
-    # 16:9 inner frame
-    assert abs(region.aspect_ratio - 16 / 9) < 0.05
+    assert region.width == win.dock.inner.width()
+    assert region.height == win.dock.inner.height()
+    assert region.width > 500
+    assert region.height > 400
 
 
 def test_studio_makes_dock_macros(qtbot, tmp_path):
@@ -66,6 +68,38 @@ def test_studio_switch_signal(qtbot):
     win._go_classic()
     assert received == ["classic"]
     assert win.settings.ui_variant == "classic"
+
+
+def test_studio_switch_persist_callback_is_no_arg(qtbot):
+    calls = []
+    win = StudioWindow(
+        Settings(), FakeBackend(), persist_settings=True, on_persist=lambda: calls.append("saved")
+    )
+    qtbot.addWidget(win)
+    win._go_classic()
+    assert calls == ["saved"]
+
+
+class _DockingBackend(FakeBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.moves: list[tuple[int, int, int, int, int]] = []
+
+    def move_resize_window(self, handle: int, left: int, top: int, width: int, height: int) -> bool:
+        self.moves.append((handle, left, top, width, height))
+        return True
+
+
+def test_studio_tracks_exact_dock_aperture(qtbot):
+    backend = _DockingBackend()
+    win = StudioWindow(Settings(), backend, persist_settings=False)
+    qtbot.addWidget(win)
+    win.resize(1160, 660)
+    win.show()
+    win._target_hwnd = 123
+    win._track_dock()
+    region = win.dock.region()
+    assert backend.moves[-1] == (123, region.left, region.top, region.width, region.height)
 
 
 def test_dock_extension():

@@ -51,6 +51,23 @@ def test_player_speed_scales_duration():
     assert clock.now == 50_000_000
 
 
+def test_player_honors_trailing_recorded_idle():
+    backend = FakeBackend()
+    clock = FakeClock()
+    macro = Macro(
+        events=[
+            MacroEvent(0, "key", "press", key="a"),
+            MacroEvent.wait(0, 300_000_000, note="recorded idle after last action"),
+        ]
+    )
+    player = Player(backend, clock_ns=clock, sleeper=clock.sleep)
+
+    player.start(macro, loop_count=2, speed=1.0, blocking=True)
+
+    assert [event.key for event in backend.emitted] == ["a", "a"]
+    assert clock.now == 600_000_000
+
+
 def test_player_calls_loop_complete_after_each_loop():
     backend = FakeBackend()
     clock = FakeClock()

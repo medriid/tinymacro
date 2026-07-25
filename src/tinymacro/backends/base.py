@@ -71,7 +71,7 @@ class InputBackend(ABC):
         return None
 
     def move_resize_window(self, handle: int, left: int, top: int, width: int, height: int) -> bool:
-        """Position + size ``handle`` so its client area fills the given rect."""
+        """Position + size ``handle`` so the whole window fills the given rect."""
         return False
 
     def close(self) -> None:

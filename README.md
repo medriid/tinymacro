@@ -13,7 +13,7 @@ window controls, and animations):
 
 - **Classic** — the compact toolbar window for everyday absolute-coordinate
   macros (`.tmacro`).
-- **Studio** — a wide 16:9 frame that **docks a selected window** in the center
+- **Studio** — a wide recessed frame that **docks a selected window** in the center
   (logs + overview on the left, macro options on the right). Everything recorded
   is stored **relative to the docked window**, so a Studio macro (`.tmacd`)
   replays at any resolution/window size and is **shareable**. Switch between the

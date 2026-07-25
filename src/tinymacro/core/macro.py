@@ -26,6 +26,53 @@ CLASSIC_EXTENSION = ".tmacro"
 DOCK_EXTENSION = ".tmacd"
 
 
+def _event_end_ns(event: MacroEvent) -> int:
+    end = event.timestamp_ns
+    if event.kind == "wait":
+        end += event.duration_ns + event.jitter_ns
+    return end
+
+
+def _is_meaningful_event(event: MacroEvent) -> bool:
+    return event.kind != "wait" and not (event.kind == "mouse" and event.action == "move")
+
+
+def _last_meaningful_event(events: list[MacroEvent]) -> MacroEvent | None:
+    return next((event for event in reversed(events) if _is_meaningful_event(event)), None)
+
+
+def _trim_wait_to_end(event: MacroEvent, end_ns: int) -> MacroEvent:
+    max_span = max(0, end_ns - event.timestamp_ns)
+    if event.duration_ns + event.jitter_ns <= max_span:
+        return event
+    duration_ns = min(event.duration_ns, max_span)
+    jitter_ns = min(event.jitter_ns, max(0, max_span - duration_ns))
+    return event._with(duration_ns=duration_ns, jitter_ns=jitter_ns)
+
+
+def _trim_events_to_end(events: list[MacroEvent], end_ns: int) -> list[MacroEvent]:
+    trimmed: list[MacroEvent] = []
+    for event in events:
+        if event.timestamp_ns > end_ns:
+            continue
+        trimmed.append(_trim_wait_to_end(event, end_ns) if event.kind == "wait" else event)
+    return trimmed
+
+
+def _trim_leading_event(event: MacroEvent, cut_ns: int) -> MacroEvent | None:
+    if event.kind == "wait":
+        end_ns = _event_end_ns(event)
+        new_start = max(0, event.timestamp_ns - cut_ns)
+        new_end = max(0, end_ns - cut_ns)
+        if new_end < new_start:
+            return None
+        max_span = new_end - new_start
+        duration_ns = min(event.duration_ns, max_span)
+        jitter_ns = min(event.jitter_ns, max(0, max_span - duration_ns))
+        return event._with(timestamp_ns=new_start, duration_ns=duration_ns, jitter_ns=jitter_ns)
+    return event.shifted(-cut_ns) if event.timestamp_ns >= cut_ns else event._with(timestamp_ns=0)
+
+
 @dataclass(slots=True)
 class Macro:
     events: list[MacroEvent] = field(default_factory=list)
@@ -56,10 +103,7 @@ class Macro:
 
     @staticmethod
     def _event_end_ns(event: MacroEvent) -> int:
-        end = event.timestamp_ns
-        if event.kind == "wait":
-            end += event.duration_ns + event.jitter_ns
-        return end
+        return _event_end_ns(event)
 
     def sorted_events(self) -> list[MacroEvent]:
         return sorted(self.events, key=lambda event: event.timestamp_ns)
@@ -85,9 +129,12 @@ class Macro:
         events = self.sorted_events()
         if not events:
             return self.copy_with(events=[])
-        last_meaningful = events[-1].timestamp_ns
-        end_ns = min(self.duration_ns, last_meaningful + max_idle_ns)
-        return self.copy_with(events=[event for event in events if event.timestamp_ns <= end_ns]).normalized()
+        last_meaningful = _last_meaningful_event(events)
+        if last_meaningful is None:
+            end_ns = min(self.duration_ns, max_idle_ns)
+        else:
+            end_ns = min(self.duration_ns, self._event_end_ns(last_meaningful) + max_idle_ns)
+        return self.copy_with(events=_trim_events_to_end(events, end_ns)).normalized()
 
     def trim_leading_idle(self, max_idle_ns: int = 50_000_000) -> "Macro":
         """Drop dead time before the first meaningful action.
@@ -98,15 +145,21 @@ class Macro:
         events = self.sorted_events()
         if len(events) < 2:
             return self.copy_with(events=events).normalized()
-        # Find the first event that carries real intent (not the anchor move).
+        # Find the first event that carries real intent (not a wait or anchor move).
         first_real = next(
-            (e for e in events if not (e.kind == "mouse" and e.action == "move")),
+            (e for e in events if _is_meaningful_event(e)),
             events[0],
         )
         cut = max(0, first_real.timestamp_ns - max_idle_ns)
         if cut <= 0:
             return self.copy_with(events=events).normalized()
-        shifted = [e.shifted(-cut) if e.timestamp_ns >= cut else e._with(timestamp_ns=0) for e in events]
+        shifted = [_trim_leading_event(event, cut) for event in events if _event_end_ns(event) >= cut]
+        anchors = [
+            event._with(timestamp_ns=0)
+            for event in events
+            if event.kind == "mouse" and event.action == "move" and _event_end_ns(event) < cut
+        ]
+        shifted = anchors[:1] + [event for event in shifted if event is not None]
         return self.copy_with(events=shifted).normalized()
 
     def trim_range(self, start_ns: int, end_ns: int) -> "Macro":

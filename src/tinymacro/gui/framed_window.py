@@ -67,7 +67,7 @@ class TitleBar(QWidget):
         self.btn_close.setObjectName("closeButton")
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 0, 6, 0)
+        layout.setContentsMargins(10, 0, 6, 4)
         layout.setSpacing(6)
         layout.addWidget(icon_label)
         if self.menu_bar is not None:
