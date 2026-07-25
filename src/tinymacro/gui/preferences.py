@@ -87,11 +87,20 @@ class PreferencesDialog(QDialog):
         self.compact_mode.setChecked(s.compact_mode)
         self.animations = QCheckBox()
         self.animations.setChecked(s.animations)
+        self.ui_scale = QDoubleSpinBox()
+        self.ui_scale.setRange(0.8, 1.8)
+        self.ui_scale.setSingleStep(0.1)
+        self.ui_scale.setValue(s.ui_scale)
+        self.density = QComboBox()
+        self.density.addItems(["comfortable", "compact"])
+        self.density.setCurrentText(s.density)
 
         form = QFormLayout()
         form.addRow("Theme", self.theme)
         form.addRow("Color preset", self.theme_preset)
         form.addRow("Custom accent", self.accent_color)
+        form.addRow("UI scale", self.ui_scale)
+        form.addRow("Density", self.density)
         form.addRow("Start in compact mode", self.compact_mode)
         form.addRow("Enable animations", self.animations)
         return _wrap(form)
@@ -128,12 +137,14 @@ class PreferencesDialog(QDialog):
         self.record_hotkey = QLineEdit(str(h.record))
         self.play_hotkey = QLineEdit(str(h.play))
         self.stop_hotkey = QLineEdit(str(h.stop))
+        self.marker_hotkey = QLineEdit(str(h.marker))
         self.emergency_hotkeys = QLineEdit(", ".join(str(key) for key in h.emergency))
 
         form = QFormLayout()
         form.addRow("Record", self.record_hotkey)
         form.addRow("Play", self.play_hotkey)
         form.addRow("Stop", self.stop_hotkey)
+        form.addRow("Marker (while recording)", self.marker_hotkey)
         form.addRow("Emergency stop keys", self.emergency_hotkeys)
         return _wrap(form)
 
@@ -212,6 +223,7 @@ class PreferencesDialog(QDialog):
                 record=Hotkey.parse(self.record_hotkey.text()),
                 play=Hotkey.parse(self.play_hotkey.text()),
                 stop=Hotkey.parse(self.stop_hotkey.text()),
+                marker=Hotkey.parse(self.marker_hotkey.text()),
                 emergency=emergency,
             )
             hotkeys.validate()
@@ -222,6 +234,8 @@ class PreferencesDialog(QDialog):
             s.accent_color = self.accent_color.text().strip()
             s.compact_mode = self.compact_mode.isChecked()
             s.animations = self.animations.isChecked()
+            s.ui_scale = self.ui_scale.value()
+            s.density = self.density.currentText()
             s.backend = self.backend.currentText()
             s.always_on_top = self.always_on_top.isChecked()
             s.tray_enabled = self.tray_enabled.isChecked()

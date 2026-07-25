@@ -110,6 +110,8 @@ def apply_theme(app: QApplication, settings_or_theme) -> ThemeColors:
     theme, preset, accent = _coerce(settings_or_theme)
     c = resolve_colors(app, theme, preset, accent)
     _current_colors = c
+    scale = float(getattr(settings_or_theme, "ui_scale", 1.0) or 1.0)
+    density = getattr(settings_or_theme, "density", "comfortable")
     palette = QPalette()
     palette.setColor(QPalette.ColorRole.Window, QColor(c.bg))
     palette.setColor(QPalette.ColorRole.WindowText, QColor(c.text))
@@ -124,16 +126,20 @@ def apply_theme(app: QApplication, settings_or_theme) -> ThemeColors:
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor(c.accent_text))
     palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(c.muted))
     app.setPalette(palette)
-    app.setStyleSheet(_stylesheet(c))
+    app.setStyleSheet(_stylesheet(c, scale, density))
     app.setAttribute(Qt.ApplicationAttribute.AA_DontShowIconsInMenus, False)
     theme_manager.changed.emit(c)
     return c
 
 
-def _stylesheet(c: ThemeColors) -> str:
+def _stylesheet(c: ThemeColors, scale: float = 1.0, density: str = "comfortable") -> str:
+    font_px = max(9, round(12 * scale))
+    pad_v = 2 if density == "compact" else 3
+    pad_h = 6 if density == "compact" else 8
+    ctrl_h = 22 if density == "compact" else 24
     return f"""
         QWidget {{
-            font-size: 12px;
+            font-size: {font_px}px;
             color: {c.text};
         }}
         QMainWindow, QDialog {{
@@ -147,11 +153,11 @@ def _stylesheet(c: ThemeColors) -> str:
         }}
         QToolButton, QPushButton {{
             min-width: 28px;
-            min-height: 24px;
+            min-height: {ctrl_h}px;
             border: 1px solid {c.border};
             border-radius: 5px;
             background: {c.panel};
-            padding: 3px 8px;
+            padding: {pad_v}px {pad_h}px;
         }}
         QToolButton:hover, QPushButton:hover {{
             border-color: {c.accent};
@@ -177,11 +183,11 @@ def _stylesheet(c: ThemeColors) -> str:
             font-weight: 600;
         }}
         QSpinBox, QDoubleSpinBox, QComboBox, QLineEdit, QTextEdit {{
-            min-height: 24px;
+            min-height: {ctrl_h}px;
             border: 1px solid {c.border};
             border-radius: 5px;
             background: {c.panel};
-            padding: 2px 6px;
+            padding: {pad_v}px {pad_h}px;
             selection-background-color: {c.accent};
             selection-color: {c.accent_text};
         }}

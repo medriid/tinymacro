@@ -509,6 +509,9 @@ class MainWindow(QMainWindow):
         self.path = path
         self.dirty = False
         self._step_index = 0
+        # Restore the macro's own saved playback preferences.
+        self.loop_spin.setValue(self.macro.loop_count)
+        self.speed_spin.setValue(self.macro.speed)
         self.library.add(path, name=path.stem)
         self.library.save()
         self.log.info("Loaded %s", path.name)
@@ -519,6 +522,10 @@ class MainWindow(QMainWindow):
         if not self.path:
             self.save_macro_as()
             return
+        # Persist the current loop/speed choices with the macro.
+        self.macro = self.macro.copy_with(
+            speed=self.speed_spin.value(), loop_count=self.loop_spin.value()
+        )
         try:
             self.macro.save(self.path)
         except Exception as exc:

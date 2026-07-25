@@ -26,6 +26,9 @@ class Macro:
     name: str = "Untitled"
     tags: tuple[str, ...] = ()
     description: str = ""
+    # Per-macro playback preferences, restored when the macro is opened.
+    speed: float = 1.0
+    loop_count: int = 1
 
     # -- timing ---------------------------------------------------------------
     @property
@@ -241,6 +244,8 @@ class Macro:
             "name": self.name,
             "tags": tuple(self.tags),
             "description": self.description,
+            "speed": self.speed,
+            "loop_count": self.loop_count,
         }
         data.update(changes)
         if "tags" in data:
@@ -264,6 +269,8 @@ class Macro:
                 "event_count": len(self.events),
                 "input_event_count": self.input_event_count(),
                 "wait_event_count": self.wait_event_count(),
+                "speed": self.speed,
+                "loop_count": self.loop_count,
             },
             "events": [event.to_dict() for event in self.sorted_events()],
         }
@@ -286,6 +293,8 @@ class Macro:
             name=data.get("name", "Untitled"),
             tags=tags,
             description=str(data.get("description", "")),
+            speed=float(metadata.get("speed", 1.0)),
+            loop_count=int(metadata.get("loop_count", 1)),
         ).normalized()
 
     def save(self, path: str | Path) -> None:

@@ -35,6 +35,8 @@ class Settings:
     compact_mode: bool = True
     animations: bool = True
     tray_enabled: bool = True
+    ui_scale: float = 1.0  # font/scale multiplier for accessibility
+    density: str = "comfortable"  # "comfortable" | "compact" control padding
     # Capture / playback tuning
     move_min_interval_ms: int = 0
     humanize_jitter_ms: int = 0
@@ -74,6 +76,10 @@ class Settings:
             raise ValueError("Humanize jitter must be zero or positive")
         if self.record_countdown < 0:
             raise ValueError("Record countdown must be zero or positive")
+        if not (0.5 <= self.ui_scale <= 2.0):
+            raise ValueError("UI scale must be between 0.5 and 2.0")
+        if self.density not in ("comfortable", "compact"):
+            raise ValueError("Density must be 'comfortable' or 'compact'")
         if self.autosave_seconds < 0:
             raise ValueError("Autosave interval must be zero or positive")
         self.hotkeys.validate()
@@ -94,6 +100,8 @@ class Settings:
             "compact_mode": self.compact_mode,
             "animations": self.animations,
             "tray_enabled": self.tray_enabled,
+            "ui_scale": self.ui_scale,
+            "density": self.density,
             "move_min_interval_ms": self.move_min_interval_ms,
             "humanize_jitter_ms": self.humanize_jitter_ms,
             "record_countdown": self.record_countdown,
@@ -119,6 +127,8 @@ class Settings:
             compact_mode=bool(data.get("compact_mode", True)),
             animations=bool(data.get("animations", True)),
             tray_enabled=bool(data.get("tray_enabled", True)),
+            ui_scale=float(data.get("ui_scale", 1.0)),
+            density=str(data.get("density", "comfortable")),
             move_min_interval_ms=int(data.get("move_min_interval_ms", 0)),
             humanize_jitter_ms=int(data.get("humanize_jitter_ms", 0)),
             record_countdown=int(data.get("record_countdown", 0)),
