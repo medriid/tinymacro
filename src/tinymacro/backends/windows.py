@@ -32,6 +32,20 @@ WHEEL_DELTA = 120
 INPUT_MOUSE = 0
 INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_SCANCODE = 0x0008
+KEYEVENTF_EXTENDEDKEY = 0x0001
+MAPVK_VK_TO_VSC = 0
+
+# Virtual keys that live on the "extended" part of the keyboard and need the
+# extended-key flag so scan-code injection maps them correctly.
+EXTENDED_VKS = {
+    0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,  # pgup/pgdn/end/home/arrows
+    0x2D, 0x2E,  # insert / delete
+    0x5B, 0x5C,  # left/right win
+    0x90,        # numlock
+    0xA3, 0xA5,  # right ctrl / right alt
+    0x6F,        # numpad divide
+}
 MOUSEEVENTF_MOVE = 0x0001
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
@@ -277,8 +291,7 @@ class WindowsBackend(InputBackend):
 
     def emit(self, event: MacroEvent) -> None:
         if event.kind == "key" and event.key:
-            flags = KEYEVENTF_KEYUP if event.action == "release" else 0
-            self._send_keyboard(_vk_code(event.key), flags)
+            self._send_keyboard(_vk_code(event.key), event.action == "release")
         elif event.kind == "mouse":
             if event.x is not None and event.y is not None:
                 self._send_mouse_absolute(event.x, event.y)
@@ -329,6 +342,8 @@ class WindowsBackend(InputBackend):
         self.user32.GetCursorPos.restype = wintypes.BOOL
         self.user32.GetSystemMetrics.argtypes = [ctypes.c_int]
         self.user32.GetSystemMetrics.restype = ctypes.c_int
+        self.user32.MapVirtualKeyW.argtypes = [wintypes.UINT, wintypes.UINT]
+        self.user32.MapVirtualKeyW.restype = wintypes.UINT
         self.user32.GetForegroundWindow.restype = wintypes.HWND
         self.user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
         self.user32.GetWindowThreadProcessId.restype = wintypes.DWORD
@@ -507,9 +522,25 @@ class WindowsBackend(InputBackend):
                 return
         callback(pressed)
 
-    def _send_keyboard(self, vk_code: int, flags: int) -> None:
-        item = INPUT(type=INPUT_KEYBOARD, union=INPUT_UNION(ki=KEYBDINPUT(vk_code, 0, flags, 0, 0)))
-        self._send_input(item)
+    def _send_keyboard(self, vk_code: int, is_up: bool) -> None:
+        """Inject a key using its hardware scan code.
+
+        Games (Roblox, most DirectInput/Raw-Input titles) ignore virtual-key
+        SendInput events and only react to scan codes, so we map the VK to a scan
+        code and set KEYEVENTF_SCANCODE. Regular apps handle scan codes too. If a
+        VK has no scan code we fall back to the virtual-key form.
+        """
+        scan = int(self.user32.MapVirtualKeyW(vk_code, MAPVK_VK_TO_VSC))
+        if scan:
+            flags = KEYEVENTF_SCANCODE
+            if vk_code in EXTENDED_VKS:
+                flags |= KEYEVENTF_EXTENDEDKEY
+            if is_up:
+                flags |= KEYEVENTF_KEYUP
+            keybd = KEYBDINPUT(0, scan, flags, 0, 0)
+        else:
+            keybd = KEYBDINPUT(vk_code, 0, KEYEVENTF_KEYUP if is_up else 0, 0, 0)
+        self._send_input(INPUT(type=INPUT_KEYBOARD, union=INPUT_UNION(ki=keybd)))
 
     def _send_mouse_absolute(self, x: int, y: int) -> None:
         left = self.user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
