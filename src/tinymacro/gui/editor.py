@@ -14,6 +14,8 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMenu,
     QPushButton,
+    QScrollArea,
+    QSlider,
     QSpinBox,
     QTreeWidget,
     QTreeWidgetItem,
@@ -28,6 +30,7 @@ from tinymacro.gui.event_dialog import EventDialog
 from tinymacro.gui.icons import get_icon
 from tinymacro.gui.image_step_dialog import ImageStepDialog
 from tinymacro.gui.theme import icon_color
+from tinymacro.gui.timeline import TimelineWidget
 
 
 class EditorDialog(QDialog):
@@ -134,12 +137,34 @@ class EditorDialog(QDialog):
         tools_layout.addLayout(tools1)
         tools_layout.addLayout(tools2)
 
+        # Graphical timeline track with a zoom control.
+        self.timeline = TimelineWidget(kind_colors=self._kind_colors)
+        self.timeline.event_clicked.connect(self._select_source_index)
+        self.timeline_scroll = QScrollArea()
+        self.timeline_scroll.setWidget(self.timeline)
+        self.timeline_scroll.setWidgetResizable(False)
+        self.timeline_scroll.setFixedHeight(78)
+        self.timeline_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.timeline_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.zoom_slider.setRange(10, 600)  # pixels per second
+        self.zoom_slider.setValue(120)
+        self.zoom_slider.setFixedWidth(140)
+        self.zoom_slider.valueChanged.connect(self.timeline.set_zoom)
+        timeline_row = QHBoxLayout()
+        timeline_row.addWidget(QLabel("Timeline"))
+        timeline_row.addWidget(self.timeline_scroll, 1)
+        timeline_row.addWidget(QLabel("Zoom"))
+        timeline_row.addWidget(self.zoom_slider)
+
         layout = QVBoxLayout(self)
         layout.addWidget(self.info)
         layout.addWidget(self.search)
+        layout.addLayout(timeline_row)
         layout.addWidget(self.tree, 1)
         layout.addWidget(tools_wrap)
         layout.addWidget(buttons)
+        self.tree.itemSelectionChanged.connect(self._sync_timeline_selection)
 
         self.undo_button.clicked.connect(self.undo)
         self.redo_button.clicked.connect(self.redo)
@@ -189,6 +214,25 @@ class EditorDialog(QDialog):
             if part
         )
         return self._filter in haystack
+
+    def _iter_items(self):
+        for i in range(self.tree.topLevelItemCount()):
+            top = self.tree.topLevelItem(i)
+            yield top
+            for j in range(top.childCount()):
+                yield top.child(j)
+
+    def _select_source_index(self, index: int) -> None:
+        for item in self._iter_items():
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data == index or (isinstance(data, list) and index in data):
+                self.tree.setCurrentItem(item)
+                self.tree.scrollToItem(item)
+                return
+
+    def _sync_timeline_selection(self) -> None:
+        indices = self._selected_source_indices()
+        self.timeline.set_selected(indices[0] if indices else -1)
 
     def _selected_source_indices(self) -> list[int]:
         indices: set[int] = set()
@@ -326,6 +370,7 @@ class EditorDialog(QDialog):
             i += 1
         for col in range(len(self._columns)):
             self.tree.resizeColumnToContents(col)
+        self.timeline.set_macro(self.macro)
         self.undo_button.setEnabled(bool(self._history))
         self.redo_button.setEnabled(bool(self._redo))
 
@@ -426,6 +471,27 @@ class EditorDialog(QDialog):
             return  # single-row reorder keeps the semantics unambiguous
         self._apply(self.macro.move_index(indices[0], direction))
 
+    def wrap_in_loop(self) -> None:
+        indices = self._selected_source_indices()
+        if not indices:
+            return
+        count, ok = QInputDialog.getInt(self, "Loop", "Repeat count (0 = until stopped):", 2, 0, 999_999)
+        if ok:
+            self._apply(self.macro.wrap_in_loop(indices, count))
+
+    def wrap_in_if(self) -> None:
+        indices = self._selected_source_indices()
+        if not indices:
+            return
+        dialog = ImageStepDialog(parent=self)
+        if not dialog.exec():
+            return
+        img = dialog.build_event()
+        condition = MacroEvent.if_image(
+            0, img.image_b64, confidence=img.confidence, region=img.region, grayscale=img.grayscale
+        )
+        self._apply(self.macro.wrap_in_if(indices, condition))
+
     def expand_all_groups(self) -> None:
         self.tree.expandAll()
 
@@ -449,6 +515,10 @@ class EditorDialog(QDialog):
             menu.addSeparator()
             menu.addAction("Move Up", lambda: self.move_selected(-1))
             menu.addAction("Move Down", lambda: self.move_selected(1))
+        if indices:
+            menu.addSeparator()
+            menu.addAction(get_icon("wait", color), "Wrap in Loop…", self.wrap_in_loop)
+            menu.addAction(get_icon("image", color), "Wrap in If (image)…", self.wrap_in_if)
         if indices:
             menu.addSeparator()
             menu.addAction(get_icon("trash", color), "Delete", self.delete_selected)

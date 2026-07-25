@@ -160,6 +160,27 @@ class Macro:
                 result.append(event._with())  # a distinct copy at the same time
         return self.copy_with(events=result).normalized()
 
+    def wrap_in_loop(self, indices: set[int] | list[int], count: int) -> "Macro":
+        """Wrap the selected contiguous range in a loop/endloop block."""
+        return self._wrap(indices, MacroEvent.loop_start(0, count), "endloop")
+
+    def wrap_in_if(self, indices: set[int] | list[int], condition: MacroEvent) -> "Macro":
+        """Wrap the selected range in an if(condition)/endif block."""
+        if condition.kind != "if":
+            raise ValueError("wrap_in_if expects an 'if' event")
+        return self._wrap(indices, condition, "endif")
+
+    def _wrap(self, indices, opener: MacroEvent, closer_kind: str) -> "Macro":
+        events = self.sorted_events()
+        chosen = sorted(i for i in indices if 0 <= i < len(events))
+        if not chosen:
+            return self.copy_with(events=events)
+        start_i, end_i = chosen[0], chosen[-1]
+        opener = opener._with(timestamp_ns=events[start_i].timestamp_ns)
+        closer = MacroEvent.control(events[end_i].timestamp_ns, closer_kind)
+        new = events[:start_i] + [opener] + events[start_i:end_i + 1] + [closer] + events[end_i + 1:]
+        return self.copy_with(events=new).normalized()
+
     def move_index(self, index: int, direction: int) -> "Macro":
         """Move the event at ``index`` up (-1) or down (+1) by swapping timestamps.
 

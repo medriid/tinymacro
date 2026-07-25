@@ -37,6 +37,10 @@ without losing its lightweight, keep-it-on-top footprint.
 - Rebuilt timeline editor: color-coded events by kind, search/filter, inline
   note editing, insert **wait steps** (fixed or random-range delays), bulk
   delete, keep-range, timing scale, and in-session **undo/redo**.
+- **Editor power-ups**: insert any key/mouse/wheel event by hand, duplicate,
+  copy/paste, reorder, a right-click context menu, and **Run from here**.
+- A zoomable **graphical timeline track** beside the table, synced to the
+  selection.
 - Macro composition helpers: chain/playlist multiple macros and repeat a macro
   N times (see `Macro.then`, `Macro.chain`, `Macro.repeated`).
 - Consecutive mouse movements collapse into expandable **movement groups** in the
@@ -56,6 +60,17 @@ without losing its lightweight, keep-it-on-top footprint.
   These are bundled in the prebuilt binaries. Screen capture works on Windows and
   X11; on pure Wayland it degrades gracefully with a clear message.
 
+### Control flow & automation steps
+
+- **Conditionals and loops**: wrap steps in an `if (image on screen) … else …`
+  block, or a `loop ×N` block, right from the editor. Playback interprets them
+  with proper nesting.
+- **Wait-for-pixel** (screen colour) and **wait-for-window** (active title) steps.
+- **Run step**: execute a shell command or Python snippet — **off by default**
+  behind a clearly-warned "Allow code-execution steps" preference.
+- Keyboard playback automatically returns focus to your target window, so
+  recorded keystrokes land where you intend (not in Tiny Macro's own window).
+
 ### Automation & integrations
 
 - **Macro library**: a local index of your macros with favorites, tags, search,
@@ -74,9 +89,9 @@ without losing its lightweight, keep-it-on-top footprint.
 
 - X11 backend through `pynput`; Wayland backend through `evdev`/`uinput`;
   Windows backend through native hooks and `SendInput`.
-- Native `.tmacro` JSON macro format, now at **format version 3** (adds wait
-  steps, per-event notes, macro tags, and click-image steps). Version-1/2 files
-  load unchanged and are transparently upgraded on load.
+- Native `.tmacro` JSON macro format, now at **format version 4** (adds wait
+  steps, per-event notes, macro tags, click-image steps, and control-flow /
+  automation steps). Older files load unchanged and are upgraded on load.
 - Exportable standalone macro runner scripts.
 - Customizable global hotkeys and an optional debug mode with detailed errors.
 

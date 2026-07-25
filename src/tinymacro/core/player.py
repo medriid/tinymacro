@@ -45,6 +45,40 @@ class SimulationReport:
         return self.duration_ns / 1_000_000_000
 
 
+def _match_control(events: list[MacroEvent]):
+    """Resolve control-flow brackets with nesting via stacks.
+
+    Returns (if_else, if_end, else_end, endloop_start) index maps. Unmatched
+    markers are simply left out; the interpreter treats a missing target as
+    end-of-macro so a malformed macro still terminates.
+    """
+    if_stack: list[int] = []
+    loop_stack: list[int] = []
+    if_else: dict[int, int] = {}
+    if_end: dict[int, int] = {}
+    else_end: dict[int, int] = {}
+    endloop_start: dict[int, int] = {}
+    for i, event in enumerate(events):
+        kind = event.kind
+        if kind == "if":
+            if_stack.append(i)
+        elif kind == "else":
+            if if_stack:
+                if_else[if_stack[-1]] = i
+        elif kind == "endif":
+            if if_stack:
+                start = if_stack.pop()
+                if_end[start] = i
+                if start in if_else:
+                    else_end[if_else[start]] = i
+        elif kind == "loop":
+            loop_stack.append(i)
+        elif kind == "endloop":
+            if loop_stack:
+                endloop_start[i] = loop_stack.pop()
+    return if_else, if_end, else_end, endloop_start
+
+
 def _parse_hex_color(text: str) -> tuple[int, int, int] | None:
     value = text.strip().lstrip("#")
     if len(value) != 6:
@@ -67,6 +101,37 @@ def _vision_available() -> bool:
         return VISION_AVAILABLE
     except Exception:  # noqa: BLE001
         return False
+
+
+def _control_flow_warnings(events: list[MacroEvent]) -> list[str]:
+    """Report unbalanced if/else/endif and loop/endloop blocks."""
+    warnings: list[str] = []
+    if_depth = 0
+    loop_depth = 0
+    for index, event in enumerate(events):
+        kind = event.kind
+        if kind == "if":
+            if_depth += 1
+        elif kind == "endif":
+            if if_depth == 0:
+                warnings.append(f"event {index}: 'endif' without a matching 'if'")
+            else:
+                if_depth -= 1
+        elif kind == "else":
+            if if_depth == 0:
+                warnings.append(f"event {index}: 'else' outside any 'if'")
+        elif kind == "loop":
+            loop_depth += 1
+        elif kind == "endloop":
+            if loop_depth == 0:
+                warnings.append(f"event {index}: 'endloop' without a matching 'loop'")
+            else:
+                loop_depth -= 1
+    if if_depth:
+        warnings.append(f"{if_depth} 'if' block(s) missing an 'endif'")
+    if loop_depth:
+        warnings.append(f"{loop_depth} 'loop' block(s) missing an 'endloop'")
+    return warnings
 
 
 def simulate(macro: Macro) -> SimulationReport:
@@ -97,6 +162,7 @@ def simulate(macro: Macro) -> SimulationReport:
                 warnings.append(
                     f"event {index} is a click-image step but the 'vision' extras are not installed"
                 )
+    warnings.extend(_control_flow_warnings(events))
     return SimulationReport(
         ok=not warnings,
         event_count=len(events),
@@ -195,37 +261,15 @@ class Player:
         loops_done = 0
         total = len(events)
         locator = self._make_locator(events, dry_run)
+        has_control = any(event.is_control for event in events)
         try:
             while not self._stop_event.is_set() and (loop_count == 0 or loops_done < loop_count):
                 self.state.loop_index = loops_done + 1
-                loop_start_ns = self.clock_ns()
-                drift_ns = 0  # accumulated random wait jitter within this loop
-                for index, event in enumerate(events):
-                    if self._stop_event.is_set():
-                        break
-                    self._wait_while_paused()
-                    if self._stop_event.is_set():
-                        break
-                    self.state.current_index = index
-                    if event.kind == "wait" and event.jitter_ns and not dry_run:
-                        drift_ns += self.rng.randint(0, event.jitter_ns)
-                    due_ns = loop_start_ns + int((event.timestamp_ns + drift_ns) / speed)
-                    self._sleep_until(due_ns)
-                    if self._stop_event.is_set():
-                        break
-                    if event.is_input and not dry_run:
-                        self.backend.emit(event)
-                        self.state.emitted_events += 1
-                    elif event.kind == "image" and not dry_run:
-                        self._run_image_event(event, locator)
-                    elif event.kind in ("run", "pixel", "window") and not dry_run:
-                        self._run_automation_event(event, locator)
-                    if self.on_progress:
-                        self.on_progress(index + 1, total)
-                    self.state.remaining_ns = max(0, int(duration_ns / speed) - (self.clock_ns() - loop_start_ns))
+                if has_control:
+                    self._execute_controlled(events, speed, dry_run, locator, total)
+                else:
+                    self._execute_scheduled(events, speed, dry_run, locator, total, duration_ns)
                 loops_done += 1
-                next_loop_ns = loop_start_ns + int((duration_ns + drift_ns) / speed)
-                self._sleep_until(next_loop_ns)
                 if not self._stop_event.is_set() and self.on_loop_complete:
                     self.on_loop_complete(loops_done, loop_count, speed, macro)
         except Exception as exc:
@@ -238,6 +282,126 @@ class Player:
                 locator.close()
             self.state.playing = False
             self.state.paused = False
+
+    # -- execution paths ------------------------------------------------------
+    def _execute_action(self, event: MacroEvent, locator, dry_run: bool) -> None:
+        """Perform a single non-control step (emit / image / automation)."""
+        if dry_run:
+            return
+        if event.is_input:
+            self.backend.emit(event)
+            self.state.emitted_events += 1
+        elif event.kind == "image":
+            self._run_image_event(event, locator)
+        elif event.kind in ("run", "pixel", "window"):
+            self._run_automation_event(event, locator)
+
+    def _execute_scheduled(self, events, speed, dry_run, locator, total, duration_ns) -> None:
+        """Straight-line playback scheduled against absolute timestamps."""
+        loop_start_ns = self.clock_ns()
+        drift_ns = 0  # accumulated random wait jitter within this loop
+        for index, event in enumerate(events):
+            if self._stop_event.is_set():
+                break
+            self._wait_while_paused()
+            if self._stop_event.is_set():
+                break
+            self.state.current_index = index
+            if event.kind == "wait" and event.jitter_ns and not dry_run:
+                drift_ns += self.rng.randint(0, event.jitter_ns)
+            due_ns = loop_start_ns + int((event.timestamp_ns + drift_ns) / speed)
+            self._sleep_until(due_ns)
+            if self._stop_event.is_set():
+                break
+            self._execute_action(event, locator, dry_run)
+            if self.on_progress:
+                self.on_progress(index + 1, total)
+            self.state.remaining_ns = max(0, int(duration_ns / speed) - (self.clock_ns() - loop_start_ns))
+        next_loop_ns = loop_start_ns + int((duration_ns + drift_ns) / speed)
+        self._sleep_until(next_loop_ns)
+
+    def _execute_controlled(self, events, speed, dry_run, locator, total) -> None:
+        """Interpret a macro that contains if/else/endif and loop/endloop blocks.
+
+        Uses relative inter-event timing (loops replay events, so absolute
+        timestamps no longer apply) and a program counter with jumps.
+        """
+        if_else, if_end, else_end, endloop_start = _match_control(events)
+        gaps = [0] + [max(0, events[i].timestamp_ns - events[i - 1].timestamp_ns) for i in range(1, len(events))]
+        loop_remaining: dict[int, int | None] = {}
+        n = len(events)
+        pc = 0
+        jumped = True  # first step has no leading delay
+        while pc < n and not self._stop_event.is_set():
+            self._wait_while_paused()
+            if self._stop_event.is_set():
+                break
+            event = events[pc]
+            self.state.current_index = pc
+
+            if not jumped:
+                if event.kind == "wait":
+                    delay = event.duration_ns + (self.rng.randint(0, event.jitter_ns) if event.jitter_ns and not dry_run else 0)
+                else:
+                    delay = gaps[pc]
+                if delay:
+                    self._sleep_until(self.clock_ns() + int(delay / speed))
+                if self._stop_event.is_set():
+                    break
+            jumped = False
+
+            kind = event.kind
+            if kind == "if":
+                taken = True if dry_run else self._eval_condition(event, locator)
+                if not taken:
+                    pc = if_else.get(pc, if_end.get(pc, n)) + 1
+                    jumped = True
+                    continue
+                pc += 1
+                continue
+            if kind == "else":
+                pc = else_end.get(pc, n) + 1  # true-branch finished → skip to endif
+                jumped = True
+                continue
+            if kind == "endif":
+                pc += 1
+                continue
+            if kind == "loop":
+                loop_remaining.setdefault(pc, None if event.count == 0 else event.count)
+                pc += 1
+                continue
+            if kind == "endloop":
+                start = endloop_start.get(pc)
+                if start is None:
+                    pc += 1
+                    continue
+                remaining = loop_remaining.get(start)
+                if remaining is None or remaining > 1:
+                    if remaining is not None:
+                        loop_remaining[start] = remaining - 1
+                    self.sleeper(0.001)  # guard against a hot infinite loop
+                    pc = start + 1
+                    jumped = True
+                    continue
+                loop_remaining.pop(start, None)
+                pc += 1
+                continue
+
+            # A normal action step.
+            self._execute_action(event, locator, dry_run)
+            if self.on_progress:
+                self.on_progress(pc + 1, total)
+            pc += 1
+
+    def _eval_condition(self, event: MacroEvent, locator) -> bool:
+        """Evaluate an ``if`` condition (currently: is the image on screen?)."""
+        try:
+            png = base64.b64decode(event.image_b64) if event.image_b64 else b""
+        except Exception:  # noqa: BLE001
+            png = b""
+        if not png or locator is None:
+            return False
+        return self._search_image(event, locator, png) is not None
 
     # -- click-image steps ----------------------------------------------------
     def _make_locator(self, events: list[MacroEvent], dry_run: bool):
