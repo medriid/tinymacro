@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QPoint, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, QPoint, QRect, QTimer, Qt, pyqtSignal
+from PyQt6.QtGui import QRegion
 from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
@@ -62,11 +63,14 @@ class DockArea(QWidget):
         self.inner.setFrameShadow(QFrame.Shadow.Sunken)
         self.inner.setLineWidth(2)
         self.inner.setMidLineWidth(1)
+        # Transparent interior: when a window is docked the interior is punched
+        # out of the Studio window (see StudioWindow._update_mask) so the docked
+        # window shows through and stays clickable. The border just frames it.
         self.inner.setStyleSheet(
             """
             #dockWell {
-                background: palette(base);
-                border: 2px inset palette(mid);
+                background: transparent;
+                border: 2px solid palette(mid);
                 border-radius: 6px;
             }
             """
@@ -123,6 +127,7 @@ class StudioWindow(FramelessWindow):
         self._target_title = ""
         self._cleaned = False
         self._keep_backend = False  # set true on a variant switch to share the backend
+        self._mask_hole: QRect | None = None
         self.toasts = ToastManager(self, animated=settings.animations)
 
         self.recorder = Recorder(
@@ -187,6 +192,10 @@ class StudioWindow(FramelessWindow):
         self.dock_btn = self._row_button("dock", "Dock Window", color, self._select_window)
         right.addWidget(self.dock_btn)
         right.addSpacing(6)
+        right.addWidget(_heading("Window"))
+        right.addWidget(self._row_button("dock", "Dock Window…", color, self._select_window))
+
+        right.addSpacing(6)
         right.addWidget(_heading("Record & Play"))
         self.record_btn = self._big_button("record", "Record", color, self.toggle_recording)
         self.play_btn = self._big_button("play", "Play", color, self.toggle_playback)
@@ -245,6 +254,7 @@ class StudioWindow(FramelessWindow):
         return region if region.valid else None
 
     def _track_dock(self) -> None:
+        self._update_mask()
         if self._target_hwnd is None:
             return
         region = self.dock.region()
@@ -255,6 +265,30 @@ class StudioWindow(FramelessWindow):
                 )
             except Exception as exc:  # noqa: BLE001
                 self.log.warning("Dock tracking failed: %s", exc)
+
+    def _update_mask(self) -> None:
+        """Punch a see-through, click-through hole where the docked window sits.
+
+        The interior of the dock well is subtracted from the Studio window's
+        shape, so the docked window (a separate top-level window filling that
+        rectangle) is always visible through it and a click there lands on the
+        docked window — even when the Studio window itself has focus. A few px are
+        left so the well's border ring stays drawn.
+        """
+        if self._target_hwnd is None or not self.isVisible():
+            if self._mask_hole is not None:
+                self._mask_hole = None
+                self.clearMask()
+            return
+        inner = self.dock.inner
+        origin = inner.mapTo(self, QPoint(0, 0))
+        hole = QRect(origin.x() + 3, origin.y() + 3, inner.width() - 6, inner.height() - 6)
+        if hole.width() <= 0 or hole.height() <= 0:
+            return
+        if hole == self._mask_hole:
+            return  # unchanged; avoid re-masking every tick (prevents flicker)
+        self._mask_hole = hole
+        self.setMask(QRegion(self.rect()).subtracted(QRegion(hole)))
 
     def _select_window(self) -> None:
         if not self.backend.supports_docking():
