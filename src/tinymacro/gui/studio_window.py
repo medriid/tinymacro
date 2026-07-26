@@ -13,6 +13,7 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, QPoint, QRect, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QRegion
 from PyQt6.QtWidgets import (
+    QApplication,
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
@@ -38,7 +39,7 @@ from tinymacro.gui.anim import AnimatedToolButton
 from tinymacro.gui.editor import EditorDialog
 from tinymacro.gui.framed_window import FramelessWindow
 from tinymacro.gui.icons import get_icon
-from tinymacro.gui.theme import icon_color, theme_manager
+from tinymacro.gui.theme import apply_theme, icon_color, theme_manager
 from tinymacro.gui.toast import ToastManager
 from tinymacro.gui.window_picker import WindowPicker
 
@@ -49,12 +50,13 @@ class _Bridge(QObject):
     loop_completed = pyqtSignal(int, int)
     progress = pyqtSignal(int, int)
     error = pyqtSignal(str)
+    hotkeys_pressed = pyqtSignal(object)  # global hotkeys, marshalled to the GUI thread
 
 
 class DockArea(QWidget):
     """Holds the recessed docking aperture."""
 
-    def __init__(self, on_select) -> None:
+    def __init__(self) -> None:
         super().__init__()
         self.setMinimumSize(560, 420)
         self.inner = QFrame(self)
@@ -75,17 +77,11 @@ class DockArea(QWidget):
             }
             """
         )
-        self.placeholder = QLabel("No window docked", self.inner)
+        self.placeholder = QLabel("No window docked — use “Dock Window” →", self.inner)
         self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.select_button = QPushButton(get_icon("dock", icon_color()), "Select Window...", self.inner)
-        self.select_button.clicked.connect(on_select)
         lay = QVBoxLayout(self.inner)
         lay.setContentsMargins(16, 16, 16, 16)
-        lay.setSpacing(8)
-        lay.addStretch(1)
         lay.addWidget(self.placeholder, alignment=Qt.AlignmentFlag.AlignCenter)
-        lay.addWidget(self.select_button, alignment=Qt.AlignmentFlag.AlignCenter)
-        lay.addStretch(1)
 
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
@@ -96,9 +92,8 @@ class DockArea(QWidget):
         return DockRegion(top_left.x(), top_left.y(), self.inner.width(), self.inner.height())
 
     def set_docked(self, docked: bool) -> None:
+        # When docked the interior becomes a see-through hole, so hide the hint.
         self.placeholder.setVisible(not docked)
-        self.select_button.setVisible(not docked)
-        self.select_button.setText("Select Window...")
 
 
 class StudioWindow(FramelessWindow):
@@ -141,6 +136,7 @@ class StudioWindow(FramelessWindow):
         self.bridge.loop_completed.connect(self._on_loop_completed)
         self.bridge.progress.connect(self._on_progress)
         self.bridge.error.connect(lambda m: self._toast(m, "error"))
+        self.bridge.hotkeys_pressed.connect(self._activate_hotkeys)
         self.player.on_loop_complete = lambda done, total, spd, macro: self.bridge.loop_completed.emit(done, total)
         self.player.on_progress = lambda i, t: self.bridge.progress.emit(i, t)
         self.player.on_error = lambda exc: self.bridge.error.emit(str(exc))
@@ -184,16 +180,13 @@ class StudioWindow(FramelessWindow):
         left_wrap.setFixedWidth(270)
 
         # CENTER — dock area
-        self.dock = DockArea(self._select_window)
+        self.dock = DockArea()
 
         # RIGHT — options
         right = QVBoxLayout()
         right.addWidget(_heading("Window"))
-        self.dock_btn = self._row_button("dock", "Dock Window", color, self._select_window)
+        self.dock_btn = self._row_button("dock", "Dock Window", color, self._toggle_dock)
         right.addWidget(self.dock_btn)
-        right.addSpacing(6)
-        right.addWidget(_heading("Window"))
-        right.addWidget(self._row_button("dock", "Dock Window…", color, self._select_window))
 
         right.addSpacing(6)
         right.addWidget(_heading("Record & Play"))
@@ -217,6 +210,7 @@ class StudioWindow(FramelessWindow):
         self.speed_spin.setSuffix("x")
         right.addWidget(self.loop_spin)
         right.addWidget(self.speed_spin)
+        right.addWidget(self._row_button("preferences", "Preferences…", color, self.open_preferences))
 
         right.addSpacing(6)
         right.addWidget(_heading("Macro"))
@@ -290,6 +284,12 @@ class StudioWindow(FramelessWindow):
         self._mask_hole = hole
         self.setMask(QRegion(self.rect()).subtracted(QRegion(hole)))
 
+    def _toggle_dock(self) -> None:
+        if self._target_hwnd is not None:
+            self._undock()
+        else:
+            self._select_window()
+
     def _select_window(self) -> None:
         if not self.backend.supports_docking():
             QMessageBox.information(
@@ -304,8 +304,18 @@ class StudioWindow(FramelessWindow):
         self._target_title = picker.selected_title
         self.macro = self.macro.copy_with(target_window=self._target_title)
         self.dock.set_docked(True)
+        self.dock_btn.setText("Undock Window")
         self._track_dock()
         self._toast(f"Docked: {self._target_title}", "success")
+        self._update_overview()
+
+    def _undock(self) -> None:
+        title = self._target_title
+        self._target_hwnd = None
+        self.dock.set_docked(False)
+        self.dock_btn.setText("Dock Window")
+        self._update_mask()  # remove the see-through hole
+        self._toast(f"Undocked: {title}" if title else "Undocked", "info")
         self._update_overview()
 
     # -- record / play --------------------------------------------------------
@@ -399,7 +409,7 @@ class StudioWindow(FramelessWindow):
     def _update_state(self) -> None:
         recording = self.recorder.recording
         playing = self.player.state.playing
-        self.dock_btn.setText("Change Window" if self._target_hwnd is not None else "Dock Window")
+        self.dock_btn.setText("Undock Window" if self._target_hwnd is not None else "Dock Window")
         self.record_btn.setText("  Stop Rec" if recording else "  Record")
         self.play_btn.setEnabled(bool(self.macro.events) and not recording)
         self.play_btn.setText("  Stop" if playing else "  Play")
@@ -428,9 +438,40 @@ class StudioWindow(FramelessWindow):
 
     def _start_hotkeys(self) -> None:
         try:
-            self.backend.start_hotkeys(lambda pressed: None)
+            self.backend.start_hotkeys(lambda pressed: self.bridge.hotkeys_pressed.emit(pressed))
         except Exception:  # noqa: BLE001
             pass
+
+    def _activate_hotkeys(self, pressed) -> None:
+        """Global record/play/stop/marker hotkeys (same set as the Classic UI)."""
+        hotkeys = self.settings.hotkeys
+        if self.recorder.recording and hotkeys.marker.is_subset_of(pressed):
+            self.recorder.add_marker("marker")
+            self._toast("Marker dropped", "info")
+        elif hotkeys.record.is_subset_of(pressed):
+            self.toggle_recording()
+        elif hotkeys.play.is_subset_of(pressed):
+            self.toggle_playback()
+        elif hotkeys.stop.is_subset_of(pressed) or any(k.is_subset_of(pressed) for k in hotkeys.emergency):
+            self.stop_all()
+
+    def open_preferences(self) -> None:
+        from tinymacro.gui.preferences import PreferencesDialog
+
+        dialog = PreferencesDialog(self.settings, self)
+        if not dialog.exec():
+            return
+        # Re-apply everything that can change from Preferences.
+        self.colors = apply_theme(QApplication.instance(), self.settings)
+        self.player.allow_code_execution = self.settings.allow_code_execution
+        self.recorder.skip_final_click = self.settings.skip_final_click
+        self.recorder.hotkeys = self.settings.hotkeys
+        self.recorder.move_min_interval_ns = self.settings.move_min_interval_ms * 1_000_000
+        self.toasts.set_animated(self.settings.animations)
+        self.loop_spin.setValue(self.settings.loop_count)
+        self.speed_spin.setValue(self.settings.speed)
+        if self.persist_settings and self._on_persist:
+            self._on_persist()
 
     def _retint(self, colors) -> None:
         self.colors = colors

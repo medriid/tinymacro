@@ -39,7 +39,7 @@ class SchedulerDialog(QDialog):
 
         color = icon_color()
         self.macro_path = QLineEdit()
-        self.macro_path.setPlaceholderText("Path to .tmacro file…")
+        self.macro_path.setPlaceholderText("Path to .tmacc file…")
         browse = QPushButton(get_icon("browse", color), "Browse…")
         browse.clicked.connect(self._browse)
         path_row = QHBoxLayout()
@@ -160,7 +160,7 @@ class SchedulerDialog(QDialog):
         self.image_preview.setPixmap(pixmap)
 
     def _browse(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Choose Macro", "", "Tiny Macro (*.tmacro)")
+        path, _ = QFileDialog.getOpenFileName(self, "Choose Macro", "", "Tiny Macro (*.tmacc *.tmacro)")
         if path:
             self.macro_path.setText(path)
 
@@ -187,7 +187,7 @@ class SchedulerDialog(QDialog):
     def _add(self) -> None:
         path = self.macro_path.text().strip()
         if not path:
-            QMessageBox.warning(self, "Missing macro", "Choose a .tmacro file first.")
+            QMessageBox.warning(self, "Missing macro", "Choose a macro file first.")
             return
         kind = self.kind.currentText()
         if kind == "image" and not self._image_b64:

@@ -5,7 +5,26 @@ import json
 import pytest
 
 from tinymacro.core.events import MacroEvent
-from tinymacro.core.macro import DOCK_FORMAT, Macro
+from tinymacro.core.macro import (
+    CLASSIC_EXTENSION,
+    DOCK_EXTENSION,
+    DOCK_FORMAT,
+    LEGACY_CLASSIC_EXTENSION,
+    Macro,
+)
+
+
+def test_extensions_pair_up():
+    assert CLASSIC_EXTENSION == ".tmacc"
+    assert DOCK_EXTENSION == ".tmacd"
+    assert LEGACY_CLASSIC_EXTENSION == ".tmacro"
+
+
+def test_legacy_tmacro_still_loads(tmp_path):
+    legacy = tmp_path / "old.tmacro"
+    Macro(events=[MacroEvent(0, "key", "press", key="a")]).save(legacy)
+    # Extension isn't enforced on load; the format field is what matters.
+    assert Macro.load(legacy).docked is False
 
 
 def test_dock_macro_format_id():

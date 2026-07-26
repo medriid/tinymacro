@@ -34,7 +34,7 @@ from tinymacro.backends.base import InputBackend
 from tinymacro.backends.factory import create_backend
 from tinymacro.core.library import MacroLibrary
 from tinymacro.core.logging_setup import get_logger
-from tinymacro.core.macro import Macro
+from tinymacro.core.macro import CLASSIC_EXTENSION, LEGACY_CLASSIC_EXTENSION, Macro
 from tinymacro.core.player import Player, simulate
 from tinymacro.core.recorder import Recorder
 from tinymacro.core.image_watcher import ImageWatcher
@@ -57,7 +57,7 @@ from tinymacro.notifications.base import LoopEvent, NotificationDispatcher
 from tinymacro.notifications.discord_notifier import DiscordNotifier
 from tinymacro.notifications.generic import GenericWebhookNotifier
 
-AUTOSAVE_NAME = "autosave-recovery.tmacro"
+AUTOSAVE_NAME = "autosave-recovery.tmacc"
 
 
 class PlaybackSignalBridge(QObject):
@@ -514,7 +514,9 @@ class MainWindow(FramelessWindow):
     def open_macro(self) -> None:
         if not self._confirm_discard():
             return
-        path, _ = QFileDialog.getOpenFileName(self, "Open Macro", "", "Tiny Macro (*.tmacro);;All Files (*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open Macro", "", "Tiny Macro (*.tmacc *.tmacro);;All Files (*)"
+        )
         if path:
             self.load_macro(Path(path))
 
@@ -557,12 +559,12 @@ class MainWindow(FramelessWindow):
         self._update_state()
 
     def save_macro_as(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Save Macro", "", "Tiny Macro (*.tmacro)")
+        path, _ = QFileDialog.getSaveFileName(self, "Save Macro", "", f"Tiny Macro (*{CLASSIC_EXTENSION})")
         if not path:
             return
         target = Path(path)
-        if target.suffix != ".tmacro":
-            target = target.with_suffix(".tmacro")
+        if target.suffix not in (CLASSIC_EXTENSION, LEGACY_CLASSIC_EXTENSION):
+            target = target.with_suffix(CLASSIC_EXTENSION)
         self.path = target
         self.save_macro()
 
@@ -587,7 +589,7 @@ class MainWindow(FramelessWindow):
             subprocess.run(["update-mime-database", str(mime_path.parent.parent)], check=False)
         except FileNotFoundError:
             pass
-        self._toast("Installed .tmacro association", "info")
+        self._toast("Installed .tmacc association", "info")
 
     # -- dialogs --------------------------------------------------------------
     def open_editor(self) -> None:

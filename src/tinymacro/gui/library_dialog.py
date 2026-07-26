@@ -124,7 +124,7 @@ class LibraryDialog(QDialog):
             self._refresh()
 
     def _add_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Add Macro", "", "Tiny Macro (*.tmacro);;All Files (*)")
+        path, _ = QFileDialog.getOpenFileName(self, "Add Macro", "", "Tiny Macro (*.tmacc *.tmacro);;All Files (*)")
         if path:
             self.library.add(path, name=Path(path).stem)
             self.library.save()

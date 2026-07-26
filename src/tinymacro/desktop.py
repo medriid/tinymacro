@@ -20,7 +20,7 @@ MIME_XML = """\
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="application/x-tiny-macro">
     <comment>Tiny Macro recording</comment>
-    <glob pattern="*.tmacro"/>
+    <glob pattern="*.tmacc"/>
   </mime-type>
 </mime-info>
 """

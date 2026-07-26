@@ -18,7 +18,7 @@ from tinymacro.core.player import Player
 
 
 def main() -> int:
-    macro_path = Path(__file__).with_suffix(".tmacro")
+    macro_path = Path(__file__).with_suffix(".tmacc")
     if not macro_path.exists():
         print(f"Missing macro file: {{macro_path}}", file=sys.stderr)
         return 2
@@ -40,7 +40,7 @@ def export_runner(macro: Macro, runner_path: str | Path, loop_count: int = 1, sp
     runner = Path(runner_path)
     if runner.suffix != ".py":
         runner = runner.with_suffix(".py")
-    macro_path = runner.with_suffix(".tmacro")
+    macro_path = runner.with_suffix(".tmacc")
     macro.save(macro_path)
     runner.write_text(textwrap.dedent(RUNNER_TEMPLATE).format(loop_count=loop_count, speed=speed), encoding="utf-8")
     runner.chmod(runner.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)

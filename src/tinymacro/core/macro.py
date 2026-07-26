@@ -17,12 +17,15 @@ from .events import MacroEvent
 FORMAT_VERSION = 4
 NANOSECONDS_PER_SECOND = 1_000_000_000
 
-# Classic macros use absolute screen coordinates and the ".tmacro" extension.
+# Classic macros use absolute screen coordinates and the ".tmacc" extension.
 # Studio (docked) macros store window-relative coordinates and use ".tmacd";
-# the two are intentionally not interchangeable between the UI variants.
+# the "c"/"d" suffixes pair up, and the two are intentionally not interchangeable
+# between the UI variants. Legacy ".tmacro" files still load (extension is not
+# enforced on load — the on-disk ``format`` field is what matters).
 CLASSIC_FORMAT = "tiny-macro"
 DOCK_FORMAT = "tiny-macro-dock"
-CLASSIC_EXTENSION = ".tmacro"
+CLASSIC_EXTENSION = ".tmacc"
+LEGACY_CLASSIC_EXTENSION = ".tmacro"
 DOCK_EXTENSION = ".tmacd"
 
 
@@ -403,12 +406,12 @@ class Macro:
         """Load a macro, rejecting it if it doesn't match the UI variant.
 
         Studio (docked) and classic macros are intentionally incompatible: a
-        ``.tmacd`` won't open in the classic UI and a ``.tmacro`` won't open in
+        ``.tmacd`` won't open in the classic UI and a ``.tmacc`` won't open in
         Studio, because their coordinates mean different things.
         """
         macro = cls.load(path)
         if macro.docked != docked:
-            wanted = "Studio (.tmacd)" if docked else "classic (.tmacro)"
-            got = "Studio (.tmacd)" if macro.docked else "classic (.tmacro)"
+            wanted = "Studio (.tmacd)" if docked else "classic (.tmacc)"
+            got = "Studio (.tmacd)" if macro.docked else "classic (.tmacc)"
             raise ValueError(f"This is a {got} macro; the current UI needs a {wanted} macro.")
         return macro
