@@ -35,6 +35,8 @@ class Recorder:
     _last_move_ns: int = -1
     _pointer_x: int | None = None
     _pointer_y: int | None = None
+    _pressed_keys: set[str] = field(default_factory=set)
+    _control_keys: set[str] = field(default_factory=set)
     pointer_anchor_recorded: bool = False
 
     @property
@@ -57,6 +59,8 @@ class Recorder:
         self._paused = False
         self._paused_ns = 0
         self._last_move_ns = -1
+        self._pressed_keys = set()
+        self._control_keys = set()
         self._pointer_x = None
         self._pointer_y = None
         self.pointer_anchor_recorded = False
@@ -88,6 +92,18 @@ class Recorder:
             return
         offset = max(0, self.clock_ns() - self._start_ns - self._paused_ns)
         self._events.append(MacroEvent.wait(offset, 0, 0, note=note))
+
+    def add_screenshot_point(self) -> None:
+        """Mark the current instant as the screenshot point for the webhook.
+
+        At playback the player captures the screen when it reaches this step, and
+        that image is what the Discord webhook sends (instead of a screenshot at
+        loop-completion time).
+        """
+        if not self._recording:
+            return
+        offset = max(0, self.clock_ns() - self._start_ns - self._paused_ns)
+        self._events.append(MacroEvent.screenshot(offset))
 
     def mark_segment(self) -> None:
         """Remember the current position so a later ``undo_segment`` can revert."""
@@ -179,10 +195,29 @@ class Recorder:
         return event.x, event.y
 
     def _is_control_event(self, event: MacroEvent) -> bool:
+        """True when a key event is (part of) an *active* global-hotkey chord.
+
+        A key is only swallowed when the whole chord is held — so pressing a plain
+        letter that merely appears in a chord (e.g. 'c' from Ctrl+Shift+Alt+C) is
+        recorded normally; the hotkey is only filtered when its modifiers are also
+        down. The trigger key's release is filtered to match its press.
+        """
         if event.kind != "key" or not event.key:
             return False
         key = normalize_key_name(event.key)
-        return any(key in hotkey.keys for hotkey in self.hotkeys.control_hotkeys())
+        if event.action == "press":
+            active = self._pressed_keys | {key}
+            self._pressed_keys.add(key)
+            if any(hotkey.keys <= active for hotkey in self.hotkeys.control_hotkeys()):
+                self._control_keys.add(key)
+                return True
+            return False
+        if event.action == "release":
+            self._pressed_keys.discard(key)
+            if key in self._control_keys:
+                self._control_keys.discard(key)
+                return True
+        return False
 
     @staticmethod
     def _drop_final_mouse_press_release(events: list[MacroEvent]) -> list[MacroEvent]:

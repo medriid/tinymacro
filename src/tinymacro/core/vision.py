@@ -120,6 +120,21 @@ def match_template(
     )
 
 
+def capture_fullscreen_png() -> bytes | None:
+    """Grab the whole virtual desktop as PNG bytes, or None if unavailable.
+
+    Creates and closes its own mss handle each call, so it is safe to call from a
+    worker thread (e.g. the player) and leaks nothing across many invocations.
+    """
+    if not CAPTURE_AVAILABLE:
+        return None
+    try:
+        with Locator() as locator:
+            return locator.capture_png()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 class Locator:
     """Captures the screen (via mss) and locates templates on it.
 

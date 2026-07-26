@@ -35,6 +35,10 @@ from tinymacro.core.macro import DOCK_EXTENSION, Macro
 from tinymacro.core.player import Player
 from tinymacro.core.recorder import Recorder
 from tinymacro.core.settings import Settings
+from tinymacro.core.vision import capture_fullscreen_png
+from tinymacro.notifications.base import LoopEvent, NotificationDispatcher
+from tinymacro.notifications.discord_notifier import DiscordNotifier
+from tinymacro.notifications.generic import GenericWebhookNotifier
 from tinymacro.gui.anim import AnimatedToolButton
 from tinymacro.gui.editor import EditorDialog
 from tinymacro.gui.framed_window import FramelessWindow
@@ -132,6 +136,9 @@ class StudioWindow(FramelessWindow):
         )
         self.player = Player(backend, dock_region_provider=self._dock_region)
         self.player.allow_code_execution = settings.allow_code_execution
+        self.player.screenshot_capturer = capture_fullscreen_png
+        self.dispatcher = NotificationDispatcher(on_error=lambda name, exc: None)
+        self._rebuild_dispatcher()
         self.bridge = _Bridge(self)
         self.bridge.loop_completed.connect(self._on_loop_completed)
         self.bridge.progress.connect(self._on_progress)
@@ -425,8 +432,40 @@ class StudioWindow(FramelessWindow):
         )
         self.dock.set_docked(self._target_hwnd is not None)
 
+    def _rebuild_dispatcher(self) -> None:
+        self.dispatcher.clear()
+        notifications = self.settings.notifications
+        self.dispatcher.register(DiscordNotifier(notifications.discord))
+        self.dispatcher.register(GenericWebhookNotifier(notifications.generic))
+
+    def _dispatch_notifications(self, done: int, total: int) -> None:
+        import threading
+
+        notifications = self.settings.notifications
+        if not (notifications.discord.enabled or notifications.generic.enabled):
+            return
+        screenshot = None
+        if notifications.discord.include_screenshot:
+            screenshot = self.player.consume_marked_screenshot() or capture_fullscreen_png()
+        event = LoopEvent(
+            loop_index=done,
+            total_loops=total,
+            speed=self.speed_spin.value(),
+            macro=self.macro,
+            is_final=bool(total) and done >= total,
+            screenshot_png=screenshot,
+        )
+        threading.Thread(
+            target=lambda: self.dispatcher.dispatch(event),
+            name="tiny-macro-notify",
+            daemon=True,
+        ).start()
+
     def _on_loop_completed(self, done: int, total: int) -> None:
         self.logs.addItem(f"✓ Loop {done}/{total or '∞'} complete")
+        while self.logs.count() > 500:
+            self.logs.takeItem(0)
+        self._dispatch_notifications(done, total)
         self.logs.scrollToBottom()
 
     def _on_progress(self, index: int, total: int) -> None:
@@ -443,9 +482,12 @@ class StudioWindow(FramelessWindow):
             pass
 
     def _activate_hotkeys(self, pressed) -> None:
-        """Global record/play/stop/marker hotkeys (same set as the Classic UI)."""
+        """Global record/play/stop/marker/screenshot hotkeys (same set as Classic)."""
         hotkeys = self.settings.hotkeys
-        if self.recorder.recording and hotkeys.marker.is_subset_of(pressed):
+        if self.recorder.recording and hotkeys.screenshot.is_subset_of(pressed):
+            self.recorder.add_screenshot_point()
+            self._toast("Screenshot point set", "success")
+        elif self.recorder.recording and hotkeys.marker.is_subset_of(pressed):
             self.recorder.add_marker("marker")
             self._toast("Marker dropped", "info")
         elif hotkeys.record.is_subset_of(pressed):
@@ -470,6 +512,7 @@ class StudioWindow(FramelessWindow):
         self.toasts.set_animated(self.settings.animations)
         self.loop_spin.setValue(self.settings.loop_count)
         self.speed_spin.setValue(self.settings.speed)
+        self._rebuild_dispatcher()  # webhook settings may have changed
         if self.persist_settings and self._on_persist:
             self._on_persist()
 

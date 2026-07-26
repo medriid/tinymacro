@@ -45,6 +45,17 @@ class InputBackend(ABC):
     def pointer_position(self) -> PointerPosition | None:
         return None
 
+    # -- precise timing (playback) -------------------------------------------
+    def begin_precise_timing(self) -> None:
+        """Hint the OS to use a high-resolution timer during playback.
+
+        Default is a no-op; the Windows backend raises the system timer
+        resolution so short sleeps in the player are accurate to ~1ms.
+        """
+
+    def end_precise_timing(self) -> None:
+        """Undo :meth:`begin_precise_timing`."""
+
     def foreground_window_if_external(self) -> int:
         """Handle of the focused window if it belongs to another process, else 0.
 

@@ -138,6 +138,7 @@ class PreferencesDialog(QDialog):
         self.play_hotkey = QLineEdit(str(h.play))
         self.stop_hotkey = QLineEdit(str(h.stop))
         self.marker_hotkey = QLineEdit(str(h.marker))
+        self.screenshot_hotkey = QLineEdit(str(h.screenshot))
         self.emergency_hotkeys = QLineEdit(", ".join(str(key) for key in h.emergency))
 
         form = QFormLayout()
@@ -145,6 +146,7 @@ class PreferencesDialog(QDialog):
         form.addRow("Play", self.play_hotkey)
         form.addRow("Stop", self.stop_hotkey)
         form.addRow("Marker (while recording)", self.marker_hotkey)
+        form.addRow("Screenshot point (while recording)", self.screenshot_hotkey)
         form.addRow("Emergency stop keys", self.emergency_hotkeys)
         return _wrap(form)
 
@@ -231,6 +233,7 @@ class PreferencesDialog(QDialog):
                 play=Hotkey.parse(self.play_hotkey.text()),
                 stop=Hotkey.parse(self.stop_hotkey.text()),
                 marker=Hotkey.parse(self.marker_hotkey.text()),
+                screenshot=Hotkey.parse(self.screenshot_hotkey.text()),
                 emergency=emergency,
             )
             hotkeys.validate()

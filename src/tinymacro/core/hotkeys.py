@@ -43,6 +43,7 @@ class HotkeySet:
     play: Hotkey = field(default_factory=lambda: Hotkey.parse("ctrl+shift+alt+p"))
     stop: Hotkey = field(default_factory=lambda: Hotkey.parse("ctrl+shift+alt+s"))
     marker: Hotkey = field(default_factory=lambda: Hotkey.parse("ctrl+shift+alt+m"))
+    screenshot: Hotkey = field(default_factory=lambda: Hotkey.parse("ctrl+shift+alt+c"))
     emergency: tuple[Hotkey, ...] = field(
         default_factory=lambda: (
             Hotkey.parse("pause"),
@@ -57,8 +58,10 @@ class HotkeySet:
             "play": self.play,
             "stop": self.stop,
             "marker": self.marker,
-            **{f"emergency_{idx}": key for idx, key in enumerate(self.emergency)},
+            "screenshot": self.screenshot,
+            **{f"emergency_{index}": key for index, key in enumerate(self.emergency)},
         }
+
         seen: dict[frozenset[str], str] = {}
         for name, hotkey in named.items():
             if hotkey.keys in seen:
@@ -66,7 +69,7 @@ class HotkeySet:
             seen[hotkey.keys] = name
 
     def control_hotkeys(self) -> tuple[Hotkey, ...]:
-        return (self.record, self.play, self.stop, self.marker, *self.emergency)
+        return (self.record, self.play, self.stop, self.marker, self.screenshot, *self.emergency)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -74,6 +77,7 @@ class HotkeySet:
             "play": str(self.play),
             "stop": str(self.stop),
             "marker": str(self.marker),
+            "screenshot": str(self.screenshot),
             "emergency": [str(key) for key in self.emergency],
         }
 
@@ -84,6 +88,7 @@ class HotkeySet:
             play=Hotkey.parse(str(data.get("play", "ctrl+shift+alt+p"))),
             stop=Hotkey.parse(str(data.get("stop", "ctrl+shift+alt+s"))),
             marker=Hotkey.parse(str(data.get("marker", "ctrl+shift+alt+m"))),
+            screenshot=Hotkey.parse(str(data.get("screenshot", "ctrl+shift+alt+c"))),
             emergency=tuple(Hotkey.parse(str(item)) for item in data.get("emergency", ["pause", "break", "scrolllock"])),
         )
         hotkeys.validate()

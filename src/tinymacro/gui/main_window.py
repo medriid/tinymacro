@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 from datetime import datetime
 import time
 from pathlib import Path
@@ -40,7 +39,7 @@ from tinymacro.core.recorder import Recorder
 from tinymacro.core.image_watcher import ImageWatcher
 from tinymacro.core.scheduler import Schedule, ScheduleStore
 from tinymacro.core.settings import Settings
-from tinymacro.core.vision import CAPTURE_AVAILABLE, Locator
+from tinymacro.core.vision import CAPTURE_AVAILABLE, Locator, capture_fullscreen_png
 from tinymacro.desktop import install_file_association
 from tinymacro.export import export_runner
 from tinymacro.gui.framed_window import FramelessWindow
@@ -106,6 +105,10 @@ class MainWindow(FramelessWindow):
         self.player.locator_factory = (lambda: Locator()) if CAPTURE_AVAILABLE else None
         self.player.on_image_missed = self._on_image_missed
         self.player.allow_code_execution = settings.allow_code_execution
+        # Screen capture for "screenshot" steps runs on the player thread (mss is
+        # thread-safe when the handle is created there); capture_fullscreen_png
+        # opens and closes its own handle each call, so it leaks nothing per loop.
+        self.player.screenshot_capturer = capture_fullscreen_png
         self.bridge = PlaybackSignalBridge(self)
         self.bridge.loop_completed.connect(self._handle_loop_completed)
         self.bridge.notify_error.connect(lambda message: self._toast(message, "error"))
@@ -432,6 +435,11 @@ class MainWindow(FramelessWindow):
             self.recorder.add_marker("marker")
             self._toast("Marker dropped", "info", 1200)
 
+    def drop_screenshot_point(self) -> None:
+        if self.recorder.recording:
+            self.recorder.add_screenshot_point()
+            self._toast("Screenshot point set", "success", 1200)
+
     def toggle_playback(self) -> None:
         if self.player.state.playing:
             self.player.stop()
@@ -687,13 +695,20 @@ class MainWindow(FramelessWindow):
         tray = self.settings.notifications.tray
         if self.tray and tray.should_send(loop_index, is_final):
             self.tray.showMessage("Tiny Macro", f"Finished loop {loop_index}", QSystemTrayIcon.MessageIcon.Information, 3000)
-        include_shot = self.settings.notifications.discord.include_screenshot
-        screenshot = self._capture_screenshot_png() if include_shot else None
+        notifications = self.settings.notifications
+        if not (notifications.discord.enabled or notifications.generic.enabled):
+            return  # nothing to send — don't build payloads or spawn a thread each loop
+        include_shot = notifications.discord.include_screenshot
+        # Prefer the screenshot captured at the macro's marked instant this loop;
+        # fall back to a fresh grab only if no screenshot point was hit.
+        screenshot = None
+        if include_shot:
+            screenshot = self.player.consume_marked_screenshot() or self._capture_screenshot_png()
         event = LoopEvent(
             loop_index=loop_index,
             total_loops=total_loops,
             speed=speed,
-            macro=copy.deepcopy(macro),
+            macro=macro,  # read-only during playback; no per-loop deepcopy needed
             is_final=is_final,
             screenshot_png=screenshot,
         )
@@ -717,8 +732,10 @@ class MainWindow(FramelessWindow):
 
     def _activate_hotkeys(self, pressed: frozenset[str]) -> None:
         hotkeys = self.settings.hotkeys
-        # Marker is checked first so it works while a recording is in progress.
-        if self.recorder.recording and hotkeys.marker.is_subset_of(pressed):
+        # Marker/screenshot are checked first so they work during a recording.
+        if self.recorder.recording and hotkeys.screenshot.is_subset_of(pressed):
+            self.drop_screenshot_point()
+        elif self.recorder.recording and hotkeys.marker.is_subset_of(pressed):
             self.drop_marker()
         elif hotkeys.record.is_subset_of(pressed):
             self.toggle_recording()
@@ -971,6 +988,9 @@ class MainWindow(FramelessWindow):
         for event in events[self._last_feed_count:]:
             self.feed.addItem(event.describe())
         self._last_feed_count = len(events)
+        # Cap the on-screen feed so a very long recording can't grow it unbounded.
+        while self.feed.count() > 400:
+            self.feed.takeItem(0)
         self.feed.scrollToBottom()
 
     def _update_state(self) -> None:

@@ -195,12 +195,16 @@ class Player:
     # absolute x/y recomputed from the current DockRegion right before emitting,
     # so playback follows the docked window wherever it now sits.
     dock_region_provider: Callable[[], "DockRegion | None"] | None = None
+    # Captures the screen when a "screenshot" step is reached, so the webhook can
+    # send the image from that exact instant. Returns PNG bytes or None.
+    screenshot_capturer: Callable[[], bytes | None] | None = None
     rng: random.Random = field(default_factory=random.Random)
 
     state: PlaybackState = field(default_factory=PlaybackState)
     _stop_event: threading.Event = field(default_factory=threading.Event)
     _pause_event: threading.Event = field(default_factory=threading.Event)
     _thread: threading.Thread | None = None
+    _marked_screenshot: bytes | None = None  # captured at a screenshot step this loop
 
     # -- lifecycle ------------------------------------------------------------
     def start(
@@ -256,6 +260,12 @@ class Player:
         self.state.current_index = index
         return event
 
+    def consume_marked_screenshot(self) -> bytes | None:
+        """Return (and clear) the screenshot captured at this loop's screenshot step."""
+        shot = self._marked_screenshot
+        self._marked_screenshot = None
+        return shot
+
     # -- main loop ------------------------------------------------------------
     def _run(self, macro: Macro, loop_count: int, speed: float, dry_run: bool) -> None:
         events = macro.sorted_events()
@@ -268,8 +278,13 @@ class Player:
         locator = self._make_locator(events, dry_run)
         has_control = any(event.is_control for event in events)
         try:
+            self.backend.begin_precise_timing()
+        except Exception:  # noqa: BLE001 - timing hint is best-effort
+            pass
+        try:
             while not self._stop_event.is_set() and (loop_count == 0 or loops_done < loop_count):
                 self.state.loop_index = loops_done + 1
+                self._marked_screenshot = None  # fresh per loop
                 if has_control:
                     self._execute_controlled(events, speed, dry_run, locator, total)
                 else:
@@ -285,6 +300,10 @@ class Player:
         finally:
             if locator is not None:
                 locator.close()
+            try:
+                self.backend.end_precise_timing()
+            except Exception:  # noqa: BLE001
+                pass
             self.state.playing = False
             self.state.paused = False
 
@@ -310,6 +329,11 @@ class Player:
             self._run_image_event(event, locator)
         elif event.kind in ("run", "pixel", "window"):
             self._run_automation_event(event, locator)
+        elif event.kind == "screenshot" and self.screenshot_capturer is not None:
+            try:
+                self._marked_screenshot = self.screenshot_capturer()
+            except Exception:  # noqa: BLE001 - a failed capture must not break playback
+                self._marked_screenshot = None
 
     def _execute_scheduled(self, events, speed, dry_run, locator, total, duration_ns) -> None:
         """Straight-line playback scheduled against absolute timestamps."""
@@ -553,6 +577,13 @@ class Player:
             self.sleeper(0.02)
 
     def _sleep_until(self, due_ns: int) -> None:
+        # Sleep in short, bounded chunks and re-check the clock, so timing stays
+        # accurate. During a run the OS timer resolution is raised to ~1ms (see
+        # the backend's precise-timing hooks), so a chunk this small lands within
+        # ~1ms of the deadline instead of the ~15ms of the default Windows timer —
+        # which is what made dense events drift/"depreciate". The final chunk is
+        # exactly the remaining time, so it converges precisely (and keeps the
+        # virtual-clock tests deterministic).
         while not self._stop_event.is_set():
             if self._pause_event.is_set():
                 self._wait_while_paused()
@@ -560,4 +591,4 @@ class Player:
             remaining_ns = due_ns - self.clock_ns()
             if remaining_ns <= 0:
                 return
-            self.sleeper(min(remaining_ns / 1_000_000_000, 0.02))
+            self.sleeper(min(remaining_ns / 1_000_000_000, 0.003))

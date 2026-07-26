@@ -284,6 +284,11 @@ class WindowsBackend(InputBackend):
             raise RuntimeError("The Windows backend can only run on Windows")
         self.user32 = ctypes.WinDLL("user32", use_last_error=True)
         self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        try:
+            self.winmm = ctypes.WinDLL("winmm")
+        except Exception:  # noqa: BLE001
+            self.winmm = None
+        self._timer_period_active = False
         self._configure_api()
         self._capture_callback: EventCallback | None = None
         self._hotkey_callback: HotkeyCallback | None = None
@@ -419,6 +424,25 @@ class WindowsBackend(InputBackend):
         if not self.user32.GetCursorPos(ctypes.byref(point)):
             return None
         return int(point.x), int(point.y)
+
+    def begin_precise_timing(self) -> None:
+        # Raise the system timer resolution to 1ms so the player's short sleeps
+        # are accurate (default Windows granularity is ~15.6ms, which makes
+        # densely-timed events drift). Paired with end_precise_timing().
+        if self.winmm is not None and not self._timer_period_active:
+            try:
+                self.winmm.timeBeginPeriod(1)
+                self._timer_period_active = True
+            except Exception:  # noqa: BLE001
+                pass
+
+    def end_precise_timing(self) -> None:
+        if self.winmm is not None and self._timer_period_active:
+            try:
+                self.winmm.timeEndPeriod(1)
+            except Exception:  # noqa: BLE001
+                pass
+            self._timer_period_active = False
 
     def foreground_window_if_external(self) -> int:
         hwnd = self.user32.GetForegroundWindow()

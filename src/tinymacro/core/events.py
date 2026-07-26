@@ -19,10 +19,11 @@ from typing import Any, Literal
 EventKind = Literal[
     "key", "mouse", "wheel", "wait", "image",
     "run", "pixel", "window", "if", "else", "endif", "loop", "endloop",
+    "screenshot",
 ]
 EventAction = Literal[
     "press", "release", "move", "scroll", "delay", "click",
-    "wait", "shell", "python", "branch", "repeat", "noop",
+    "wait", "shell", "python", "branch", "repeat", "noop", "capture",
 ]
 
 # Only these kinds produce real input that is emitted to a backend; everything
@@ -232,6 +233,11 @@ class MacroEvent:
         """Build a bare control marker (else/endif/endloop)."""
         return cls(timestamp_ns=timestamp_ns, kind=kind, action="noop", note=note)  # type: ignore[arg-type]
 
+    @classmethod
+    def screenshot(cls, timestamp_ns: int, note: str = "") -> "MacroEvent":
+        """A marker that captures the screen during playback (for the webhook)."""
+        return cls(timestamp_ns=timestamp_ns, kind="screenshot", action="capture", note=note)
+
     @property
     def is_input(self) -> bool:
         """True when the event produces real input (i.e. should be emitted).
@@ -319,6 +325,8 @@ class MacroEvent:
             return f"loop ×{self.count}" if self.count else "loop (forever)"
         if self.kind == "endloop":
             return "end loop"
+        if self.kind == "screenshot":
+            return "screenshot point"
         if self.kind == "key":
             return f"key {self.action} {self.key}"
         if self.kind == "wheel":
