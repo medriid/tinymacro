@@ -50,7 +50,7 @@ def run_app(initial_macro: Path | None = None, backend_name: str = "auto") -> in
         if variant == "studio":
             window = StudioWindow(
                 settings, backend, persist_settings=True, library=library,
-                colors=colors, on_persist=persist_profiles,
+                schedules=schedules, colors=colors, on_persist=persist_profiles,
             )
         else:
             window = MainWindow(

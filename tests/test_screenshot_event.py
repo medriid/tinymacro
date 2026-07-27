@@ -60,16 +60,19 @@ def test_player_captures_at_screenshot_step():
         MacroEvent.screenshot(1_000_000),
         MacroEvent(2_000_000, "key", "release", key="a"),
     ])
-    player = Player(_Backend(), sleeper=lambda s: None, screenshot_capturer=capturer)
+    delivered = []
+    player = Player(
+        _Backend(), sleeper=lambda s: None, screenshot_capturer=capturer,
+        on_loop_complete=lambda d, t, s, m, shot: delivered.append(shot),
+    )
     player.on_error = lambda exc: (_ for _ in ()).throw(exc)
     player.start(macro, loop_count=1, blocking=True)
+    # Captured once, at the marked step, and handed to the loop-complete callback.
     assert captured["n"] == 1
-    assert player.consume_marked_screenshot() == b"PNGDATA"
-    # consumed → cleared
-    assert player.consume_marked_screenshot() is None
+    assert delivered == [b"PNGDATA"]
 
 
-def test_player_screenshot_resets_each_loop():
+def test_player_delivers_marked_screenshot_per_loop():
     shots = iter([b"one", b"two"])
 
     def capturer():
@@ -79,8 +82,22 @@ def test_player_screenshot_resets_each_loop():
     seen = []
     player = Player(
         _Backend(), sleeper=lambda s: None, screenshot_capturer=capturer,
-        on_loop_complete=lambda d, t, s, m: seen.append(player.consume_marked_screenshot()),
+        on_loop_complete=lambda d, t, s, m, shot: seen.append(shot),
     )
     player.on_error = lambda exc: (_ for _ in ()).throw(exc)
     player.start(macro, loop_count=2, blocking=True)
+    # Each loop's marked screenshot is delivered with that loop's completion —
+    # no shared slot the next loop could overwrite before the host reads it.
     assert seen == [b"one", b"two"]
+
+
+def test_loop_with_no_screenshot_step_delivers_none():
+    macro = Macro(events=[MacroEvent(0, "key", "press", key="a")])
+    seen = []
+    player = Player(
+        _Backend(), sleeper=lambda s: None, screenshot_capturer=lambda: b"UNUSED",
+        on_loop_complete=lambda d, t, s, m, shot: seen.append(shot),
+    )
+    player.on_error = lambda exc: (_ for _ in ()).throw(exc)
+    player.start(macro, loop_count=2, blocking=True)
+    assert seen == [None, None]

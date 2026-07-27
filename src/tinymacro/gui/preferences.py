@@ -117,19 +117,34 @@ class PreferencesDialog(QDialog):
         self.humanize_jitter.setRange(0, 5000)
         self.humanize_jitter.setSuffix(" ms")
         self.humanize_jitter.setValue(s.humanize_jitter_ms)
+        self.loop_gap_enabled = QCheckBox()
+        self.loop_gap_enabled.setChecked(s.loop_gap_enabled)
+        self.loop_gap_enabled.setToolTip(
+            f"Insert a short {s.loop_gap_ms} ms settling pause between loop "
+            "iterations so each loop starts fresh instead of blurring into the "
+            "next. Off = loops run back-to-back."
+        )
         self.record_countdown = QSpinBox()
         self.record_countdown.setRange(0, 30)
         self.record_countdown.setSuffix(" s")
         self.record_countdown.setValue(s.record_countdown)
         self.auto_trim_leading = QCheckBox()
         self.auto_trim_leading.setChecked(s.auto_trim_leading)
+        self.restore_window_on_undock = QCheckBox()
+        self.restore_window_on_undock.setChecked(s.restore_window_on_undock)
+        self.restore_window_on_undock.setToolTip(
+            "Studio: put the docked window back to its original size and position "
+            "when you undock it."
+        )
 
         form = QFormLayout()
         form.addRow("Skip final click on stop", self.skip_final_click)
         form.addRow("Mouse-move sampling interval", self.move_min_interval)
         form.addRow("Playback timing jitter (QA realism)", self.humanize_jitter)
+        form.addRow("Fresh restart gap between loops", self.loop_gap_enabled)
         form.addRow("Countdown before recording (0 = off)", self.record_countdown)
         form.addRow("Auto-trim idle before first action", self.auto_trim_leading)
+        form.addRow("Studio: restore window on undock", self.restore_window_on_undock)
         return _wrap(form)
 
     def _build_hotkeys_tab(self) -> QWidget:
@@ -253,8 +268,10 @@ class PreferencesDialog(QDialog):
             s.skip_final_click = self.skip_final_click.isChecked()
             s.move_min_interval_ms = self.move_min_interval.value()
             s.humanize_jitter_ms = self.humanize_jitter.value()
+            s.loop_gap_enabled = self.loop_gap_enabled.isChecked()
             s.record_countdown = self.record_countdown.value()
             s.auto_trim_leading = self.auto_trim_leading.isChecked()
+            s.restore_window_on_undock = self.restore_window_on_undock.isChecked()
             s.loop_count = self.loop_count.value()
             s.speed = self.speed.value()
             s.log_to_file = self.log_to_file.isChecked()

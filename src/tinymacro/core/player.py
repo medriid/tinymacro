@@ -19,6 +19,40 @@ if TYPE_CHECKING:
 # How often to re-scan the screen while waiting for a click-image target.
 IMAGE_POLL_S = 0.15
 
+# -- precise-timing tuning ----------------------------------------------------
+# Windows' default scheduler granularity is ~15.6ms, so a plain time.sleep of a
+# few milliseconds routinely overshoots by 1-15ms — and by a *different* amount
+# each time, depending on system load. Replayed at that resolution, dense events
+# lose their small inter-event pauses and each loop drifts differently from the
+# last (exactly the "deviation as the loops go on" the user saw).
+#
+# The fix is a two-stage wait: coarse-sleep the bulk of the interval (with the OS
+# timer raised to ~1ms via the backend's precise-timing hooks) and then busy-spin
+# the final sub-millisecond slice on a high-resolution clock so we land on the
+# deadline to within tens of microseconds — consistently, every loop.
+_SPIN_NS = 1_500_000  # spin (busy-wait) the last 1.5ms up to the deadline
+_MAX_CHUNK_NS = 20_000_000  # cap coarse sleeps at 20ms so pause/stop stay responsive
+
+
+def precise_sleep(seconds: float) -> None:
+    """Sleep ``seconds`` with sub-millisecond accuracy on real hardware.
+
+    Short requests (<= the spin threshold) are satisfied entirely by busy-waiting
+    on ``perf_counter_ns``; longer ones fall back to a plain ``time.sleep`` (the
+    caller keeps those below the responsiveness cap). This is the default player
+    sleeper; tests inject a virtual-clock sleeper instead, so this never runs
+    under the deterministic timing tests.
+    """
+    if seconds <= 0:
+        return
+    ns = int(seconds * 1_000_000_000)
+    if ns > _SPIN_NS:
+        time.sleep(seconds)
+        return
+    end = time.perf_counter_ns() + ns
+    while time.perf_counter_ns() < end:
+        pass
+
 
 @dataclass(slots=True)
 class PlaybackState:
@@ -178,8 +212,12 @@ def simulate(macro: Macro) -> SimulationReport:
 class Player:
     backend: InputBackend
     clock_ns: Callable[[], int] = time.monotonic_ns
-    sleeper: Callable[[float], None] = time.sleep
-    on_loop_complete: Callable[[int, int, float, Macro], None] | None = None
+    sleeper: Callable[[float], None] = precise_sleep
+    # Called once per completed loop with (loops_done, loop_count, speed, macro,
+    # screenshot). ``screenshot`` is the PNG captured at this loop's screenshot
+    # step, or None if the macro has no screenshot step (or capture failed). It is
+    # passed by value so the host never races the next loop for it.
+    on_loop_complete: Callable[[int, int, float, Macro, bytes | None], None] | None = None
     on_error: Callable[[Exception], None] | None = None
     on_progress: Callable[[int, int], None] | None = None
     # Builds a screen Locator for click-image steps. Called on the playback
@@ -198,13 +236,30 @@ class Player:
     # Captures the screen when a "screenshot" step is reached, so the webhook can
     # send the image from that exact instant. Returns PNG bytes or None.
     screenshot_capturer: Callable[[], bytes | None] | None = None
+    # A small idle inserted *between* loops (not before the first, not after the
+    # last) so every iteration starts from a clean, settled state and reads as a
+    # fresh run rather than one continuous blur. Nanoseconds; 0 disables it.
+    loop_gap_ns: int = 0
+    # When true, any key/button the macro pressed but never released is released
+    # at the end of each loop, so a held input can't bleed into the next loop.
+    reset_between_loops: bool = False
+    # Called with a step's source index (into ``macro.sorted_events()``) the moment
+    # it is about to run — drives the editor's live current-step highlight.
+    on_step: Callable[[int], None] | None = None
+    # Source indices at which playback auto-pauses (editor breakpoints). When a
+    # step in this set is reached, the player pauses itself and calls
+    # ``on_breakpoint`` so the host can surface it; the normal resume continues.
+    breakpoints: set[int] = field(default_factory=set)
+    on_breakpoint: Callable[[int], None] | None = None
     rng: random.Random = field(default_factory=random.Random)
 
     state: PlaybackState = field(default_factory=PlaybackState)
     _stop_event: threading.Event = field(default_factory=threading.Event)
     _pause_event: threading.Event = field(default_factory=threading.Event)
     _thread: threading.Thread | None = None
-    _marked_screenshot: bytes | None = None  # captured at a screenshot step this loop
+    _pending_screenshot: bytes | None = None  # captured at this loop's screenshot step
+    _held_keys: set[str] = field(default_factory=set)
+    _held_buttons: set[str] = field(default_factory=set)
 
     # -- lifecycle ------------------------------------------------------------
     def start(
@@ -255,16 +310,9 @@ class Player:
             raise IndexError("Event index out of range")
         event = events[index]
         if event.is_input:
-            self.backend.emit(self._resolve_coords(event))
-            self.state.emitted_events += 1
+            self._emit(self._resolve_coords(event))
         self.state.current_index = index
         return event
-
-    def consume_marked_screenshot(self) -> bytes | None:
-        """Return (and clear) the screenshot captured at this loop's screenshot step."""
-        shot = self._marked_screenshot
-        self._marked_screenshot = None
-        return shot
 
     # -- main loop ------------------------------------------------------------
     def _run(self, macro: Macro, loop_count: int, speed: float, dry_run: bool) -> None:
@@ -283,21 +331,38 @@ class Player:
             pass
         try:
             while not self._stop_event.is_set() and (loop_count == 0 or loops_done < loop_count):
+                # A settling gap between iterations, so each loop feels fresh. Not
+                # applied before the first loop nor after the last.
+                if loops_done and self.loop_gap_ns and not dry_run:
+                    self._sleep_until(self.clock_ns() + self.loop_gap_ns)
+                    if self._stop_event.is_set():
+                        break
                 self.state.loop_index = loops_done + 1
-                self._marked_screenshot = None  # fresh per loop
+                self._pending_screenshot = None  # fresh per loop
+                self._held_keys.clear()
+                self._held_buttons.clear()
+
                 if has_control:
                     self._execute_controlled(events, speed, dry_run, locator, total)
                 else:
                     self._execute_scheduled(events, speed, dry_run, locator, total, duration_ns)
+
+                # Release anything the macro left held so the next loop starts clean.
+                if self.reset_between_loops and not dry_run and not self._stop_event.is_set():
+                    self._release_held()
+
                 loops_done += 1
                 if not self._stop_event.is_set() and self.on_loop_complete:
-                    self.on_loop_complete(loops_done, loop_count, speed, macro)
+                    self.on_loop_complete(loops_done, loop_count, speed, macro, self._pending_screenshot)
         except Exception as exc:
             if self.on_error:
                 self.on_error(exc)
             else:
                 raise
         finally:
+            if self.reset_between_loops and not dry_run:
+                # Never leave a synthetic key/button stuck down when playback ends.
+                self._release_held()
             if locator is not None:
                 locator.close()
             try:
@@ -317,26 +382,84 @@ class Player:
         x, y = to_absolute(event.fx, event.fy, region)
         return event._with(x=x, y=y)
 
+    # -- emitting / input-state tracking --------------------------------------
+    def _emit(self, event: MacroEvent) -> None:
+        """Send one input event and remember any key/button it leaves held."""
+        self.backend.emit(event)
+        self.state.emitted_events += 1
+        if event.kind == "key" and event.key:
+            if event.action == "press":
+                self._held_keys.add(event.key)
+            elif event.action == "release":
+                self._held_keys.discard(event.key)
+        elif event.kind == "mouse" and event.button and event.action in {"press", "release"}:
+            if event.action == "press":
+                self._held_buttons.add(event.button)
+            else:
+                self._held_buttons.discard(event.button)
+
+    def _release_held(self) -> None:
+        """Emit releases for every key/button still held from synthetic input."""
+        for key in sorted(self._held_keys):
+            try:
+                self.backend.emit(MacroEvent(0, "key", "release", key=key))
+            except Exception:  # noqa: BLE001 - cleanup must never raise
+                pass
+        for button in sorted(self._held_buttons):
+            try:
+                self.backend.emit(MacroEvent(0, "mouse", "release", button=button))
+            except Exception:  # noqa: BLE001
+                pass
+        self._held_keys.clear()
+        self._held_buttons.clear()
+
+    def _reach_step(self, source_index: int) -> None:
+        """Announce a step is about to run, and honour a breakpoint on it.
+
+        Fires ``on_step`` (for the editor's live highlight) then, if this index is
+        a breakpoint, pauses the player and fires ``on_breakpoint`` so the host can
+        show where it stopped. Blocks here until the host resumes (or stops).
+        """
+        if self.on_step is not None:
+            try:
+                self.on_step(source_index)
+            except Exception:  # noqa: BLE001 - a UI callback must never break playback
+                pass
+        if source_index in self.breakpoints and not self._stop_event.is_set():
+            self._pause_event.set()
+            self.state.paused = True
+            if self.on_breakpoint is not None:
+                try:
+                    self.on_breakpoint(source_index)
+                except Exception:  # noqa: BLE001
+                    pass
+            self._wait_while_paused()
+
     # -- execution paths ------------------------------------------------------
     def _execute_action(self, event: MacroEvent, locator, dry_run: bool) -> None:
         """Perform a single non-control step (emit / image / automation)."""
         if dry_run:
             return
         if event.is_input:
-            self.backend.emit(self._resolve_coords(event))
-            self.state.emitted_events += 1
+            self._emit(self._resolve_coords(event))
         elif event.kind == "image":
             self._run_image_event(event, locator)
         elif event.kind in ("run", "pixel", "window"):
             self._run_automation_event(event, locator)
         elif event.kind == "screenshot" and self.screenshot_capturer is not None:
             try:
-                self._marked_screenshot = self.screenshot_capturer()
+                self._pending_screenshot = self.screenshot_capturer()
             except Exception:  # noqa: BLE001 - a failed capture must not break playback
-                self._marked_screenshot = None
+                self._pending_screenshot = None
 
     def _execute_scheduled(self, events, speed, dry_run, locator, total, duration_ns) -> None:
-        """Straight-line playback scheduled against absolute timestamps."""
+        """Straight-line playback scheduled against absolute timestamps.
+
+        Every event's deadline is measured from a single ``loop_start_ns`` anchor
+        captured at the top of *this* loop, so timing never drifts across events
+        and each loop replays identically. The final wait to ``duration_ns`` keeps
+        recorded trailing idle as part of the loop period.
+        """
         loop_start_ns = self.clock_ns()
         drift_ns = 0  # accumulated random wait jitter within this loop
         for index, event in enumerate(events):
@@ -352,6 +475,10 @@ class Player:
             self._sleep_until(due_ns)
             if self._stop_event.is_set():
                 break
+            if not dry_run:
+                self._reach_step(index)
+                if self._stop_event.is_set():
+                    break
             self._execute_action(event, locator, dry_run)
             if self.on_progress:
                 self.on_progress(index + 1, total)
@@ -362,8 +489,11 @@ class Player:
     def _execute_controlled(self, events, speed, dry_run, locator, total) -> None:
         """Interpret a macro that contains if/else/endif and loop/endloop blocks.
 
-        Uses relative inter-event timing (loops replay events, so absolute
-        timestamps no longer apply) and a program counter with jumps.
+        Loops replay events, so absolute timestamps no longer apply; timing is the
+        relative gap between consecutive events. To keep those gaps from drifting
+        as the interpreter runs, delays advance a running ``target`` clock rather
+        than being measured from "now" each step — so a slightly-late sleep on one
+        step doesn't push every later step. The target re-anchors after any jump.
         """
         if_else, if_end, else_end, endloop_start = _match_control(events)
         gaps = [0] + [max(0, events[i].timestamp_ns - events[i - 1].timestamp_ns) for i in range(1, len(events))]
@@ -371,6 +501,7 @@ class Player:
         n = len(events)
         pc = 0
         jumped = True  # first step has no leading delay
+        target_ns = self.clock_ns()
         while pc < n and not self._stop_event.is_set():
             self._wait_while_paused()
             if self._stop_event.is_set():
@@ -378,16 +509,21 @@ class Player:
             event = events[pc]
             self.state.current_index = pc
 
-            if not jumped:
+            if jumped:
+                # Re-anchor after a branch/loop so timing stays continuous instead
+                # of trying to "catch up" across the jump.
+                target_ns = self.clock_ns()
+                jumped = False
+            else:
                 if event.kind == "wait":
                     delay = event.duration_ns + (self.rng.randint(0, event.jitter_ns) if event.jitter_ns and not dry_run else 0)
                 else:
                     delay = gaps[pc]
                 if delay:
-                    self._sleep_until(self.clock_ns() + int(delay / speed))
+                    target_ns += int(delay / speed)
+                    self._sleep_until(target_ns)
                 if self._stop_event.is_set():
                     break
-            jumped = False
 
             kind = event.kind
             if kind == "if":
@@ -427,6 +563,10 @@ class Player:
                 continue
 
             # A normal action step.
+            if not dry_run:
+                self._reach_step(pc)
+                if self._stop_event.is_set():
+                    break
             self._execute_action(event, locator, dry_run)
             if self.on_progress:
                 self.on_progress(pc + 1, total)
@@ -569,21 +709,21 @@ class Player:
             MacroEvent(timestamp_ns=0, kind="mouse", action="press", button=button, x=x, y=y),
             MacroEvent(timestamp_ns=0, kind="mouse", action="release", button=button, x=x, y=y),
         ):
-            self.backend.emit(synthetic)
-            self.state.emitted_events += 1
+            self._emit(synthetic)
 
     def _wait_while_paused(self) -> None:
         while self._pause_event.is_set() and not self._stop_event.is_set():
             self.sleeper(0.02)
 
     def _sleep_until(self, due_ns: int) -> None:
-        # Sleep in short, bounded chunks and re-check the clock, so timing stays
-        # accurate. During a run the OS timer resolution is raised to ~1ms (see
-        # the backend's precise-timing hooks), so a chunk this small lands within
-        # ~1ms of the deadline instead of the ~15ms of the default Windows timer —
-        # which is what made dense events drift/"depreciate". The final chunk is
-        # exactly the remaining time, so it converges precisely (and keeps the
-        # virtual-clock tests deterministic).
+        """Block until the monotonic clock reaches ``due_ns``.
+
+        Long waits are chunked (capped at ``_MAX_CHUNK_NS``) so a pause or stop is
+        noticed promptly; the last slice is handed to the sleeper whole so the
+        precise sleeper can spin it out and land on the deadline exactly. Because
+        every deadline is absolute, an overshoot on one hop is corrected on the
+        next instead of accumulating.
+        """
         while not self._stop_event.is_set():
             if self._pause_event.is_set():
                 self._wait_while_paused()
@@ -591,4 +731,8 @@ class Player:
             remaining_ns = due_ns - self.clock_ns()
             if remaining_ns <= 0:
                 return
-            self.sleeper(min(remaining_ns / 1_000_000_000, 0.003))
+            if remaining_ns > _SPIN_NS:
+                self.sleeper(min(remaining_ns - _SPIN_NS, _MAX_CHUNK_NS) / 1_000_000_000)
+            else:
+                self.sleeper(remaining_ns / 1_000_000_000)
+                return

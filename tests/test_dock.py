@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tinymacro.core.dock import DockRegion, to_absolute, to_relative
+from tinymacro.core.dock import DockRegion, scale_to_physical, to_absolute, to_relative
 
 
 def test_round_trip_center():
@@ -40,3 +40,18 @@ def test_invalid_region():
 
 def test_aspect_ratio():
     assert abs(DockRegion(0, 0, 1920, 1080).aspect_ratio - 16 / 9) < 1e-6
+
+
+def test_scale_to_physical_at_125_percent():
+    # A logical aperture on a 125%-scaled display maps to a larger physical rect,
+    # so the docked window (placed via physical-pixel SetWindowPos) fills it.
+    region = scale_to_physical(360, 150, 1016, 720, 1.25)
+    assert region == DockRegion(450, 188, 1270, 900)
+
+
+def test_scale_to_physical_is_noop_at_100_percent():
+    assert scale_to_physical(10, 20, 800, 600, 1.0) == DockRegion(10, 20, 800, 600)
+
+
+def test_scale_to_physical_defaults_bad_ratio():
+    assert scale_to_physical(10, 20, 800, 600, 0.0) == DockRegion(10, 20, 800, 600)

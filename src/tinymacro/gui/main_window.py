@@ -46,6 +46,7 @@ from tinymacro.gui.framed_window import FramelessWindow
 from tinymacro.gui.editor import EditorDialog
 from tinymacro.gui.icons import app_icon, get_icon
 from tinymacro.gui.library_dialog import LibraryDialog
+from tinymacro.gui.playlist_dialog import PlaylistDialog
 from tinymacro.gui.log_dialog import LogDialog
 from tinymacro.gui.preferences import PreferencesDialog
 from tinymacro.gui.scheduler_dialog import SchedulerDialog
@@ -60,12 +61,14 @@ AUTOSAVE_NAME = "autosave-recovery.tmacc"
 
 
 class PlaybackSignalBridge(QObject):
-    loop_completed = pyqtSignal(int, int, float, object)
+    loop_completed = pyqtSignal(int, int, float, object, object)
     notify_error = pyqtSignal(str)
     hotkeys_pressed = pyqtSignal(object)
     debug_error = pyqtSignal(str, str)
     progress = pyqtSignal(int, int)
     image_trigger = pyqtSignal(object)  # fired by the ImageWatcher thread
+    step_reached = pyqtSignal(int)  # live playhead: source index now executing
+    breakpoint_hit = pyqtSignal(int)  # playback paused at a breakpoint
 
 
 class MainWindow(FramelessWindow):
@@ -109,6 +112,10 @@ class MainWindow(FramelessWindow):
         # thread-safe when the handle is created there); capture_fullscreen_png
         # opens and closes its own handle each call, so it leaks nothing per loop.
         self.player.screenshot_capturer = capture_fullscreen_png
+        # Fresh, deterministic loops: a small settling gap between iterations and a
+        # release of any leftover held keys/buttons so each loop starts clean.
+        self.player.loop_gap_ns = settings.effective_loop_gap_ns
+        self.player.reset_between_loops = True
         self.bridge = PlaybackSignalBridge(self)
         self.bridge.loop_completed.connect(self._handle_loop_completed)
         self.bridge.notify_error.connect(lambda message: self._toast(message, "error"))
@@ -116,9 +123,17 @@ class MainWindow(FramelessWindow):
         self.bridge.debug_error.connect(self._handle_debug_error)
         self.bridge.progress.connect(self._on_progress)
         self.bridge.image_trigger.connect(self._on_image_trigger)
+        self.bridge.step_reached.connect(self._on_step_reached)
+        self.bridge.breakpoint_hit.connect(self._on_breakpoint_hit)
         self.player.on_loop_complete = self._emit_loop_completed
         self.player.on_error = self._emit_playback_error
         self.player.on_progress = lambda i, t: self.bridge.progress.emit(i, t)
+        self.player.on_step = lambda i: self.bridge.step_reached.emit(i)
+        self.player.on_breakpoint = lambda i: self.bridge.breakpoint_hit.emit(i)
+        # The non-modal editor (when open) and whether the live playhead applies to
+        # the run in progress (only true for a plain Play of the current macro).
+        self._editor: EditorDialog | None = None
+        self._playhead_active = False
 
         self.dispatcher = NotificationDispatcher(
             on_error=lambda name, exc: self.bridge.notify_error.emit(f"{name}: {exc}")
@@ -312,6 +327,7 @@ class MainWindow(FramelessWindow):
 
         tools_menu = self.menu_bar().addMenu("Tools")
         self._menu_action(tools_menu, "library", "Macro Library", self.open_library)
+        self._menu_action(tools_menu, "play", "Playlist", self.open_playlist)
         self._menu_action(tools_menu, "scheduler", "Scheduler", self.open_scheduler)
         self._menu_action(tools_menu, "validate", "Validate (dry run)", self.validate_macro)
         self._menu_action(tools_menu, "note", "Drop Marker (while recording)", self.drop_marker)
@@ -455,6 +471,7 @@ class MainWindow(FramelessWindow):
             macro = macro.humanized(self.settings.humanize_jitter_ms * 1_000_000)
         self._restore_target_focus(macro)
         self.player.on_loop_complete = self._emit_loop_completed
+        self._prepare_playhead(True)  # a plain Play drives the editor playhead
         try:
             self.player.start(macro, loop_count=self.settings.loop_count, speed=self.settings.speed)
         except Exception as exc:
@@ -534,6 +551,10 @@ class MainWindow(FramelessWindow):
         except Exception as exc:
             self._report_error("Open failed", exc, always_dialog=True)
             return
+        # Show the file's name rather than a generic "Untitled" when the macro
+        # carries no meaningful name of its own.
+        if self.macro.name in ("", "Untitled"):
+            self.macro = self.macro.copy_with(name=path.stem)
         self.path = path
         self.dirty = False
         self._step_index = 0
@@ -550,9 +571,11 @@ class MainWindow(FramelessWindow):
         if not self.path:
             self.save_macro_as()
             return
-        # Persist the current loop/speed choices with the macro.
+        # Persist the current loop/speed choices with the macro, and adopt the
+        # file's name when the macro doesn't already carry a meaningful one.
+        name = self.macro.name if self.macro.name not in ("", "Untitled") else self.path.stem
         self.macro = self.macro.copy_with(
-            speed=self.speed_spin.value(), loop_count=self.loop_spin.value()
+            name=name, speed=self.speed_spin.value(), loop_count=self.loop_spin.value()
         )
         try:
             self.macro.save(self.path)
@@ -601,10 +624,52 @@ class MainWindow(FramelessWindow):
 
     # -- dialogs --------------------------------------------------------------
     def open_editor(self) -> None:
-        dialog = EditorDialog(self.macro, self, colors=self.colors)
-        dialog.macro_changed.connect(self._replace_macro)
-        dialog.run_from_requested.connect(self._run_macro_from)
-        dialog.exec()
+        # A single, non-modal editor that can stay open while a macro plays: the
+        # current step is highlighted live and breakpoints pause playback.
+        if self._editor is not None:
+            self._editor.raise_()
+            self._editor.activateWindow()
+            return
+        editor = EditorDialog(self.macro, self, colors=self.colors, live=True)
+        editor.macro_changed.connect(self._replace_macro)
+        editor.run_from_requested.connect(self._run_macro_from)
+        editor.breakpoints_changed.connect(self._on_breakpoints_changed)
+        editor.finished.connect(self._on_editor_closed)
+        self._editor = editor
+        editor.show()
+
+    def _on_editor_closed(self, _result: int = 0) -> None:
+        self._playhead_active = False
+        self.player.breakpoints = set()
+        self._editor = None
+
+    def _on_breakpoints_changed(self, breakpoints: set) -> None:
+        # Keep the running player in sync so toggling a breakpoint mid-run applies.
+        self.player.breakpoints = set(breakpoints)
+
+    def _on_step_reached(self, index: int) -> None:
+        if self._playhead_active and self._editor is not None:
+            self._editor.set_playing_index(index)
+
+    def _on_breakpoint_hit(self, index: int) -> None:
+        if self._playhead_active and self._editor is not None:
+            self._editor.set_paused_at(index)
+        self._toast(f"Paused at step {index} (breakpoint) — press Pause to resume", "info", 2500)
+        self._update_state()
+
+    def _prepare_playhead(self, active: bool) -> None:
+        """Arm (or disarm) the live playhead + breakpoints for the next run.
+
+        Only a plain Play of the current macro drives the editor playhead, since
+        only then do playback indices line up with the editor's rows.
+        """
+        self._playhead_active = active and self._editor is not None
+        if active and self._editor is not None:
+            self.player.breakpoints = set(self._editor.breakpoints)
+        else:
+            self.player.breakpoints = set()
+            if self._editor is not None:
+                self._editor.clear_playing()
 
     def _run_macro_from(self, index: int) -> None:
         """Play the current macro starting at ``index`` (editor 'Run from here')."""
@@ -613,6 +678,7 @@ class MainWindow(FramelessWindow):
             return
         tail = self.macro.copy_with(events=events[index:]).normalized()
         self._restore_target_focus(tail)
+        self._prepare_playhead(False)  # a tail's indices don't line up with the editor
         try:
             self.player.start(tail, loop_count=1, speed=self.speed_spin.value())
         except Exception as exc:  # noqa: BLE001
@@ -630,6 +696,28 @@ class MainWindow(FramelessWindow):
         dialog.play_requested.connect(self._play_path)
         dialog.exec()
 
+    def open_playlist(self) -> None:
+        dialog = PlaylistDialog(self.library, docked=False, parent=self)
+        dialog.play_requested.connect(self._play_built_macro)
+        dialog.exec()
+
+    def _play_built_macro(self, macro: Macro) -> None:
+        """Run a macro assembled by a tool (e.g. a playlist) via the player."""
+        if not macro.events:
+            QMessageBox.information(self, "Empty", "That playlist produced no events.")
+            return
+        if self.settings.humanize_jitter_ms > 0:
+            macro = macro.humanized(self.settings.humanize_jitter_ms * 1_000_000)
+        self._restore_target_focus(macro)
+        self._prepare_playhead(False)  # a stitched playlist isn't the editor's macro
+        try:
+            self.player.start(macro, loop_count=self.loop_spin.value(), speed=self.speed_spin.value())
+        except Exception as exc:  # noqa: BLE001
+            self._report_error("Playback failed", exc)
+            return
+        self.log.info("Playing playlist (%s events)", len(macro.events))
+        self._update_state()
+
     def open_scheduler(self) -> None:
         SchedulerDialog(self.schedules, self).exec()
         # Triggers may have been added/removed/toggled.
@@ -644,6 +732,7 @@ class MainWindow(FramelessWindow):
         except Exception as exc:
             self._report_error("Play failed", exc, always_dialog=True)
             return
+        self._prepare_playhead(False)
         self.player.start(macro, loop_count=self.loop_spin.value(), speed=self.speed_spin.value())
         self.library.record_run(path)
         self.library.save()
@@ -655,6 +744,7 @@ class MainWindow(FramelessWindow):
         if dialog.exec():
             self._persist()
             self.player.allow_code_execution = self.settings.allow_code_execution
+            self.player.loop_gap_ns = self.settings.effective_loop_gap_ns
             self._sync_playback_controls_from_settings()
             app = QApplication.instance()
             if app:
@@ -680,6 +770,8 @@ class MainWindow(FramelessWindow):
         self.player.on_loop_complete = self._emit_loop_completed
         self.player.on_error = self._emit_playback_error
         self.player.on_progress = lambda i, t: self.bridge.progress.emit(i, t)
+        self.player.on_step = lambda i: self.bridge.step_reached.emit(i)
+        self.player.on_breakpoint = lambda i: self.bridge.breakpoint_hit.emit(i)
         self._start_hotkeys()
         self.log.info("Switched backend to %s", self.backend.name)
 
@@ -690,7 +782,7 @@ class MainWindow(FramelessWindow):
         self.dispatcher.register(DiscordNotifier(notifications.discord))
         self.dispatcher.register(GenericWebhookNotifier(notifications.generic))
 
-    def _handle_loop_completed(self, loop_index: int, total_loops: int, speed: float, macro: Macro) -> None:
+    def _handle_loop_completed(self, loop_index: int, total_loops: int, speed: float, macro: Macro, marked_shot: bytes | None) -> None:
         is_final = bool(total_loops) and loop_index >= total_loops
         tray = self.settings.notifications.tray
         if self.tray and tray.should_send(loop_index, is_final):
@@ -699,11 +791,12 @@ class MainWindow(FramelessWindow):
         if not (notifications.discord.enabled or notifications.generic.enabled):
             return  # nothing to send — don't build payloads or spawn a thread each loop
         include_shot = notifications.discord.include_screenshot
-        # Prefer the screenshot captured at the macro's marked instant this loop;
+        # Prefer the screenshot captured at the macro's marked instant this loop
+        # (delivered with the loop-complete signal, so no race with the next loop);
         # fall back to a fresh grab only if no screenshot point was hit.
         screenshot = None
         if include_shot:
-            screenshot = self.player.consume_marked_screenshot() or self._capture_screenshot_png()
+            screenshot = marked_shot or self._capture_screenshot_png()
         event = LoopEvent(
             loop_index=loop_index,
             total_loops=total_loops,
@@ -745,8 +838,8 @@ class MainWindow(FramelessWindow):
             self.stop_all()
 
     # -- signal plumbing ------------------------------------------------------
-    def _emit_loop_completed(self, loop_index: int, total_loops: int, speed: float, macro: Macro) -> None:
-        self.bridge.loop_completed.emit(loop_index, total_loops, speed, macro)
+    def _emit_loop_completed(self, loop_index: int, total_loops: int, speed: float, macro: Macro, screenshot: bytes | None) -> None:
+        self.bridge.loop_completed.emit(loop_index, total_loops, speed, macro, screenshot)
 
     def _emit_playback_error(self, exc: Exception) -> None:
         self.bridge.debug_error.emit("Playback failed", self._format_exception(exc))
@@ -899,6 +992,7 @@ class MainWindow(FramelessWindow):
                 continue
             schedule.mark_fired(now)
             self.schedules.save()
+            self._prepare_playhead(False)
             self.player.start(macro, loop_count=schedule.loop_count, speed=schedule.speed)
             self.log.info("Ran scheduled macro %s", schedule.display_name)
             self._toast(f"Scheduled run: {schedule.display_name}", "info")
@@ -932,6 +1026,7 @@ class MainWindow(FramelessWindow):
         schedule.mark_image_fired()
         self.schedules.save()
         self._active_image_schedule = schedule
+        self._prepare_playhead(False)
         self.player.start(macro, loop_count=1, speed=schedule.speed)
         self.log.info("Image trigger fired: %s", schedule.display_name)
         self._toast(f"Image trigger: {schedule.display_name}", "info")
@@ -996,6 +1091,10 @@ class MainWindow(FramelessWindow):
     def _update_state(self) -> None:
         recording = self.recorder.recording
         playing = self.player.state.playing
+        # Once playback ends (not merely paused at a breakpoint), drop the live
+        # playhead highlight in the editor.
+        if self._editor is not None and not playing:
+            self._editor.clear_playing()
         self.record_action.setChecked(recording)
         self.indicator.set_active(recording)
         self.play_action.setEnabled(bool(self.macro.events) and not recording)

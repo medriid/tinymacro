@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QIcon, QImage, QPixmap
+from PyQt6.QtGui import QBrush, QColor, QIcon, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -36,11 +36,19 @@ from tinymacro.gui.timeline import TimelineWidget
 class EditorDialog(QDialog):
     macro_changed = pyqtSignal(object)
     run_from_requested = pyqtSignal(int)  # play the saved macro from this index
+    breakpoints_changed = pyqtSignal(object)  # the set of breakpoint source indices
 
-    def __init__(self, macro: Macro, parent=None, colors=None) -> None:
+    # Highlight tint for the step currently executing during playback.
+    _PLAYING_TINT = QColor("#28c76f")
+    _PAUSED_TINT = QColor("#e0a030")
+
+    def __init__(self, macro: Macro, parent=None, colors=None, live: bool = False) -> None:
         super().__init__(parent)
         self.setWindowTitle("Macro Editor")
         self.resize(880, 520)
+        # ``live`` keeps the editor open (non-modal) while a macro plays: edits
+        # apply to the host immediately and the current step is highlighted.
+        self.live = live
         self._kind_colors = getattr(colors, "kind_colors", None) or {}
         self.macro = macro.normalized()
         self._history: list[Macro] = []
@@ -48,6 +56,14 @@ class EditorDialog(QDialog):
         self._filter = ""
         self._clipboard: list[MacroEvent] = []
         self._pending_run_index: int | None = None
+        # Debugging state: breakpoints (source indices) and the live playhead.
+        self.breakpoints: set[int] = set()
+        self._playing_item: QTreeWidgetItem | None = None
+        self._playing_saved: dict[int, QBrush] = {}
+        self._paused_index = -1
+        # source index -> the tree row that represents it (move-group children map
+        # to their parent), so the live playhead is an O(1) lookup, not a scan.
+        self._index_items: dict[int, QTreeWidgetItem] = {}
 
         self.info = QLabel()
         self.search = QLineEdit()
@@ -125,11 +141,18 @@ class EditorDialog(QDialog):
         tools2.addWidget(self.insert_auto_button)
         tools2.addStretch(1)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
+        if self.live:
+            # Non-modal: edits are already applied to the host as they happen, so a
+            # single Close is clearer than OK/Cancel (undo is available in-editor).
+            buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+            buttons.rejected.connect(self.accept)
+            buttons.accepted.connect(self.accept)
+        else:
+            buttons = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+            )
+            buttons.accepted.connect(self.accept)
+            buttons.rejected.connect(self.reject)
 
         tools_wrap = QWidget()
         tools_layout = QVBoxLayout(tools_wrap)
@@ -181,10 +204,19 @@ class EditorDialog(QDialog):
 
     # -- history --------------------------------------------------------------
     def _apply(self, new_macro: Macro) -> None:
+        old_len = len(self.macro.events)
         self._history.append(self.macro)
         self._redo.clear()
         self.macro = new_macro
+        # Breakpoints are positional. In-place edits (same count) keep them; any
+        # structural edit that changes the count would shift positions
+        # unpredictably, so drop them rather than point at the wrong step.
+        if len(new_macro.events) != old_len and self.breakpoints:
+            self.breakpoints.clear()
+            self.breakpoints_changed.emit(set())
         self._populate()
+        if self.live:
+            self.macro_changed.emit(self.macro)
 
     def undo(self) -> None:
         if not self._history:
@@ -192,6 +224,8 @@ class EditorDialog(QDialog):
         self._redo.append(self.macro)
         self.macro = self._history.pop()
         self._populate()
+        if self.live:
+            self.macro_changed.emit(self.macro)
 
     def redo(self) -> None:
         if not self._redo:
@@ -199,6 +233,8 @@ class EditorDialog(QDialog):
         self._history.append(self.macro)
         self.macro = self._redo.pop()
         self._populate()
+        if self.live:
+            self.macro_changed.emit(self.macro)
 
     # -- view -----------------------------------------------------------------
     def _on_filter(self, text: str) -> None:
@@ -302,6 +338,10 @@ class EditorDialog(QDialog):
         return item
 
     def _populate(self) -> None:
+        # The tree is rebuilt, so any stored playhead item is now dangling.
+        self._playing_item = None
+        self._playing_saved = {}
+        self._index_items = {}
         events = self.macro.sorted_events()
         image_count = self.macro.image_event_count()
         image_note = f", {image_count} image" if image_count else ""
@@ -373,6 +413,88 @@ class EditorDialog(QDialog):
         self.timeline.set_macro(self.macro)
         self.undo_button.setEnabled(bool(self._history))
         self.redo_button.setEnabled(bool(self._redo))
+        self._build_index_map()
+        self._paint_breakpoints()
+
+    def _build_index_map(self) -> None:
+        self._index_items = {}
+        for item in self._iter_items():
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if isinstance(data, list):
+                for i in data:
+                    self._index_items[i] = item
+            elif data is not None:
+                self._index_items[data] = item
+
+    # -- debugging: breakpoints + live playhead -------------------------------
+    def _paint_breakpoints(self) -> None:
+        """Prefix breakpointed rows with a red dot in the '#' column."""
+        if not self.breakpoints:
+            return
+        red = QBrush(QColor("#e0554e"))
+        for item in self._iter_items():
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            indices = data if isinstance(data, list) else [data]
+            if any(i in self.breakpoints for i in indices if i is not None):
+                text = item.text(0)
+                if not text.startswith("●"):
+                    item.setText(0, f"● {text}")
+                item.setForeground(0, red)
+
+    def _item_for_index(self, index: int) -> QTreeWidgetItem | None:
+        """The row (or containing move-group parent) for a source index."""
+        return self._index_items.get(index)
+
+    def set_playing_index(self, index: int) -> None:
+        """Highlight the step currently executing, without touching selection."""
+        self._remove_highlight()
+        item = self._item_for_index(index)
+        self.timeline.set_playing(index)
+        if item is None:
+            return
+        tint = self._PAUSED_TINT if index == self._paused_index else self._PLAYING_TINT
+        brush = QBrush(QColor(tint))
+        self._playing_item = item
+        self._playing_saved = {}
+        for col in range(self.tree.columnCount()):
+            self._playing_saved[col] = item.background(col)
+            item.setBackground(col, brush)
+        self.tree.scrollToItem(item)
+
+    def _remove_highlight(self) -> None:
+        """Restore the previously highlighted row's colours (keeps paused state)."""
+        self.timeline.set_playing(-1)
+        if self._playing_item is not None:
+            try:
+                for col, brush in self._playing_saved.items():
+                    self._playing_item.setBackground(col, brush)
+            except RuntimeError:
+                pass  # the underlying row was rebuilt; nothing to restore
+        self._playing_item = None
+        self._playing_saved = {}
+
+    def clear_playing(self) -> None:
+        """Remove the live playhead highlight (called when playback ends)."""
+        self._paused_index = -1
+        self._remove_highlight()
+
+    def set_paused_at(self, index: int) -> None:
+        """Mark that playback paused at a breakpoint on ``index``."""
+        self._paused_index = index
+        self.set_playing_index(index)
+
+    def toggle_breakpoint(self) -> None:
+        """Toggle breakpoints on the selected rows."""
+        indices = self._selected_source_indices()
+        if not indices:
+            return
+        # If any selected row is unset, set them all; otherwise clear them all.
+        if any(i not in self.breakpoints for i in indices):
+            self.breakpoints.update(indices)
+        else:
+            self.breakpoints.difference_update(indices)
+        self.breakpoints_changed.emit(set(self.breakpoints))
+        self._populate()
 
     # -- operations -----------------------------------------------------------
     def delete_selected(self) -> None:
@@ -517,6 +639,11 @@ class EditorDialog(QDialog):
             menu.addAction("Move Down", lambda: self.move_selected(1))
         if indices:
             menu.addSeparator()
+            already = all(i in self.breakpoints for i in indices)
+            label = "Clear Breakpoint" if already else "Toggle Breakpoint"
+            menu.addAction(get_icon("pin", color), label, self.toggle_breakpoint)
+        if indices:
+            menu.addSeparator()
             menu.addAction(get_icon("wait", color), "Wrap in Loop…", self.wrap_in_loop)
             menu.addAction(get_icon("image", color), "Wrap in If (image)…", self.wrap_in_if)
         if indices:
@@ -552,7 +679,15 @@ class EditorDialog(QDialog):
             self._apply(self.macro.set_note(index, text))
 
     def run_from_here(self, index: int) -> None:
-        """Save and ask the main window to play from the selected step."""
+        """Ask the host to play the macro from the selected step.
+
+        In live mode the editor stays open (it's non-modal); otherwise it applies
+        and closes as before.
+        """
+        if self.live:
+            self.macro_changed.emit(self.macro)
+            self.run_from_requested.emit(index)
+            return
         self._pending_run_index = index
         self.accept()
 

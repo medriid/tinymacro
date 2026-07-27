@@ -117,6 +117,10 @@ _ICONS: dict[str, str] = {
              '<circle cx="8.5" cy="9.5" r="1.8" fill="{color}"/>'
              '<path d="M5 17.5 10 12l3.2 3 3-2.6 3 4" fill="none" stroke="{color}" '
              'stroke-width="1.6" stroke-linejoin="round"/>',
+    "crop": '<path d="M7 3v14h14" fill="none" stroke="{color}" stroke-width="1.8" '
+            'stroke-linecap="round" stroke-linejoin="round"/>'
+            '<path d="M3 7h14v14" fill="none" stroke="{color}" stroke-width="1.8" '
+            'stroke-linecap="round" stroke-linejoin="round"/>',
     # -- generic actions ------------------------------------------------------
     "star_filled": '<path d="M12 3.5 14.6 9l6 .7-4.5 4 1.3 5.9L12 16.7 6.6 19.6 7.9 13.7 3.4 9.7l6-.7z" '
                    'fill="{color}"/>',

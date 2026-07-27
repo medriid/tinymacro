@@ -521,14 +521,35 @@ class WindowsBackend(InputBackend):
         return (int(origin.x), int(origin.y), int(width), int(height))
 
     def move_resize_window(self, handle: int, left: int, top: int, width: int, height: int) -> bool:
-        """Size the selected top-level window so it fills the Studio aperture."""
+        """Size the window so its *client area* fills (left, top, width, height).
+
+        SetWindowPos works on the whole window rect, so we add the non-client
+        borders (title bar / frame) computed from the current window vs client
+        rects. Without this compensation the title bar eats into the aperture and
+        the client area falls short of filling the void.
+        """
         if width <= 0 or height <= 0:
             return False
         hwnd = wintypes.HWND(handle)
+        # Restore first so a maximized/minimized target has meaningful rects.
         self.user32.ShowWindow(hwnd, SW_RESTORE)
+        window = RECT()
+        client = RECT()
+        if not self.user32.GetWindowRect(hwnd, ctypes.byref(window)):
+            return False
+        if not self.user32.GetClientRect(hwnd, ctypes.byref(client)):
+            return False
+        client_origin = POINT(0, 0)
+        self.user32.ClientToScreen(hwnd, ctypes.byref(client_origin))
+        border_left = client_origin.x - window.left
+        border_top = client_origin.y - window.top
+        extra_w = (window.right - window.left) - (client.right - client.left)
+        extra_h = (window.bottom - window.top) - (client.bottom - client.top)
         return bool(
             self.user32.SetWindowPos(
-                hwnd, None, int(left), int(top), int(width), int(height),
+                hwnd, None,
+                int(left) - border_left, int(top) - border_top,
+                int(width) + extra_w, int(height) + extra_h,
                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
             )
         )

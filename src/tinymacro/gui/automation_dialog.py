@@ -13,11 +13,15 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPlainTextEdit,
+    QPushButton,
     QSpinBox,
     QWidget,
 )
 
 from tinymacro.core.events import DEFAULT_TIMEOUT_MS, MacroEvent
+from tinymacro.gui.icons import get_icon
+from tinymacro.gui.region_capture import capture_pixel
+from tinymacro.gui.theme import icon_color
 
 _KINDS = ["run shell", "run python", "wait pixel", "wait window"]
 
@@ -52,11 +56,16 @@ class AutomationDialog(QDialog):
         self.on_missing = QComboBox()
         self.on_missing.addItems(["fail", "skip", "continue"])
 
+        self.pick_btn = QPushButton(get_icon("crop", icon_color()), "Pick…")
+        self.pick_btn.setToolTip("Click/drag on screen to grab a pixel colour and its position")
+        self.pick_btn.clicked.connect(self._pick_pixel)
+
         xy_row = QHBoxLayout()
         xy_row.addWidget(QLabel("x"))
         xy_row.addWidget(self.x)
         xy_row.addWidget(QLabel("y"))
         xy_row.addWidget(self.y)
+        xy_row.addWidget(self.pick_btn)
         xy_widget = QWidget()
         xy_widget.setLayout(xy_row)
 
@@ -85,6 +94,7 @@ class AutomationDialog(QDialog):
     def _sync(self, kind: str) -> None:
         is_pixel = kind == "wait pixel"
         self._xy_widget.setVisible(is_pixel)
+        self.pick_btn.setVisible(is_pixel)
         self._pixel_label.setVisible(is_pixel)
         self.tolerance.setVisible(is_pixel)
         self._tol_label.setVisible(is_pixel)
@@ -95,6 +105,20 @@ class AutomationDialog(QDialog):
             "wait window": "Notepad  (title substring)",
         }
         self.command.setPlaceholderText(hints.get(kind, ""))
+
+    def _pick_pixel(self) -> None:
+        # Hide our own window so it isn't in the frozen screenshot.
+        self.hide()
+        try:
+            picked = capture_pixel(self)
+        finally:
+            self.show()
+        if picked is None:
+            return
+        x, y, (r, g, b) = picked
+        self.x.setValue(x)
+        self.y.setValue(y)
+        self.command.setPlainText(f"#{r:02x}{g:02x}{b:02x}")
 
     def build_event(self, timestamp_ns: int = 0) -> MacroEvent:
         kind = self.kind.currentText()

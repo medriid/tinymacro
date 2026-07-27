@@ -11,7 +11,7 @@ unchanged beneath the title bar.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, pyqtSignal
+from PyQt6.QtCore import QEasingCurve, QEvent, QPoint, QPropertyAnimation, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -62,9 +62,12 @@ class TitleBar(QWidget):
         self.title_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
         self.btn_min = self._chrome_button("win_min", color, animated, window.showMinimized)
+        self.btn_min.setToolTip("Minimize")
         self.btn_max = self._chrome_button("win_max", color, animated, window.toggle_max_restore)
+        self.btn_max.setToolTip("Maximize")
         self.btn_close = self._chrome_button("win_close", color, animated, window.close)
         self.btn_close.setObjectName("closeButton")
+        self.btn_close.setToolTip("Close")
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 0, 6, 4)
@@ -86,6 +89,13 @@ class TitleBar(QWidget):
 
     def set_title(self, title: str) -> None:
         self.title_label.setText(title)
+
+    def update_max_restore(self, maximized: bool) -> None:
+        """Swap the maximize button between a full-window and restore (two-window)
+        glyph to mirror the window state, in whatever the current theme colour is."""
+        name = "win_restore" if maximized else "win_max"
+        self.btn_max.setIcon(get_icon(name, icon_color(), 18))
+        self.btn_max.setToolTip("Restore" if maximized else "Maximize")
 
     # -- drag to move ---------------------------------------------------------
     def mousePressEvent(self, event):  # noqa: N802
@@ -121,6 +131,7 @@ class FramelessWindow(QMainWindow):
         self.title_bar = TitleBar(self, title, with_menu, animated)
         self.setMenuWidget(self.title_bar)
         self._resize_edge = Qt.Edge(0)
+        self.title_bar.update_max_restore(self.isMaximized())
 
     def menu_bar(self) -> QMenuBar | None:
         return self.title_bar.menu_bar
@@ -134,6 +145,13 @@ class FramelessWindow(QMainWindow):
             self.showNormal()
         else:
             self.showMaximized()
+
+    def changeEvent(self, event):  # noqa: N802
+        # Keep the maximize/restore glyph in sync however the state changes —
+        # our button, a double-click, or an OS snap/maximize.
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self.title_bar.update_max_restore(self.isMaximized())
 
     # -- open / close animations ----------------------------------------------
     def showEvent(self, event):  # noqa: N802

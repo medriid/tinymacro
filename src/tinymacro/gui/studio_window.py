@@ -28,14 +28,16 @@ from PyQt6.QtWidgets import (
 )
 
 from tinymacro.backends.base import InputBackend
-from tinymacro.core.dock import DockRegion
+from tinymacro.core.dock import DockRegion, scale_to_physical
 from tinymacro.core.library import MacroLibrary
 from tinymacro.core.logging_setup import get_logger
 from tinymacro.core.macro import DOCK_EXTENSION, Macro
-from tinymacro.core.player import Player
+from tinymacro.core.player import Player, simulate
 from tinymacro.core.recorder import Recorder
+from tinymacro.core.scheduler import ScheduleStore
 from tinymacro.core.settings import Settings
 from tinymacro.core.vision import capture_fullscreen_png
+from tinymacro.export import export_runner
 from tinymacro.notifications.base import LoopEvent, NotificationDispatcher
 from tinymacro.notifications.discord_notifier import DiscordNotifier
 from tinymacro.notifications.generic import GenericWebhookNotifier
@@ -43,6 +45,10 @@ from tinymacro.gui.anim import AnimatedToolButton
 from tinymacro.gui.editor import EditorDialog
 from tinymacro.gui.framed_window import FramelessWindow
 from tinymacro.gui.icons import get_icon
+from tinymacro.gui.library_dialog import LibraryDialog
+from tinymacro.gui.playlist_dialog import PlaylistDialog
+from tinymacro.gui.log_dialog import LogDialog
+from tinymacro.gui.scheduler_dialog import SchedulerDialog
 from tinymacro.gui.theme import apply_theme, icon_color, theme_manager
 from tinymacro.gui.toast import ToastManager
 from tinymacro.gui.window_picker import WindowPicker
@@ -51,10 +57,12 @@ _DOCK_FILTER = f"Studio Macro (*{DOCK_EXTENSION})"
 
 
 class _Bridge(QObject):
-    loop_completed = pyqtSignal(int, int)
+    loop_completed = pyqtSignal(int, int, object)
     progress = pyqtSignal(int, int)
     error = pyqtSignal(str)
     hotkeys_pressed = pyqtSignal(object)  # global hotkeys, marshalled to the GUI thread
+    step_reached = pyqtSignal(int)  # live playhead: source index now executing
+    breakpoint_hit = pyqtSignal(int)  # playback paused at a breakpoint
 
 
 class DockArea(QWidget):
@@ -92,8 +100,16 @@ class DockArea(QWidget):
         self.inner.setGeometry(0, 0, self.width(), self.height())
 
     def region(self) -> DockRegion:
+        # Report the aperture in *physical* pixels: SetWindowPos (docking) and the
+        # low-level mouse hook (recording) both work in device pixels, so on a
+        # scaled display the logical Qt geometry must be converted or the docked
+        # window lands small and off-centre.
         top_left = self.inner.mapToGlobal(QPoint(0, 0))
-        return DockRegion(top_left.x(), top_left.y(), self.inner.width(), self.inner.height())
+        return scale_to_physical(
+            top_left.x(), top_left.y(),
+            self.inner.width(), self.inner.height(),
+            self.inner.devicePixelRatioF(),
+        )
 
     def set_docked(self, docked: bool) -> None:
         # When docked the interior becomes a see-through hole, so hide the hint.
@@ -109,6 +125,7 @@ class StudioWindow(FramelessWindow):
         backend: InputBackend,
         persist_settings: bool = True,
         library: MacroLibrary | None = None,
+        schedules: ScheduleStore | None = None,
         colors=None,
         on_persist=None,
     ) -> None:
@@ -120,10 +137,14 @@ class StudioWindow(FramelessWindow):
         self.colors = colors
         self.log = get_logger()
         self.library = library if library is not None else MacroLibrary()
+        self.schedules = schedules if schedules is not None else ScheduleStore()
         self.macro = Macro(docked=True)
         self.path: Path | None = None
         self._target_hwnd: int | None = None
         self._target_title = ""
+        # The target window's client rect (physical px) captured at dock time, so
+        # undock can put it back where it was.
+        self._pre_dock_rect: tuple[int, int, int, int] | None = None
         self._cleaned = False
         self._keep_backend = False  # set true on a variant switch to share the backend
         self._mask_hole: QRect | None = None
@@ -137,6 +158,10 @@ class StudioWindow(FramelessWindow):
         self.player = Player(backend, dock_region_provider=self._dock_region)
         self.player.allow_code_execution = settings.allow_code_execution
         self.player.screenshot_capturer = capture_fullscreen_png
+        # A small settling gap between loops + release of any leftover held input,
+        # so every iteration replays as a clean, fresh run.
+        self.player.loop_gap_ns = settings.effective_loop_gap_ns
+        self.player.reset_between_loops = True
         self.dispatcher = NotificationDispatcher(on_error=lambda name, exc: None)
         self._rebuild_dispatcher()
         self.bridge = _Bridge(self)
@@ -144,9 +169,18 @@ class StudioWindow(FramelessWindow):
         self.bridge.progress.connect(self._on_progress)
         self.bridge.error.connect(lambda m: self._toast(m, "error"))
         self.bridge.hotkeys_pressed.connect(self._activate_hotkeys)
-        self.player.on_loop_complete = lambda done, total, spd, macro: self.bridge.loop_completed.emit(done, total)
+        self.bridge.step_reached.connect(self._on_step_reached)
+        self.bridge.breakpoint_hit.connect(self._on_breakpoint_hit)
+        self.player.on_loop_complete = (
+            lambda done, total, spd, macro, shot: self.bridge.loop_completed.emit(done, total, shot)
+        )
         self.player.on_progress = lambda i, t: self.bridge.progress.emit(i, t)
         self.player.on_error = lambda exc: self.bridge.error.emit(str(exc))
+        self.player.on_step = lambda i: self.bridge.step_reached.emit(i)
+        self.player.on_breakpoint = lambda i: self.bridge.breakpoint_hit.emit(i)
+        # Non-modal editor + whether the live playhead applies to the current run.
+        self._editor: EditorDialog | None = None
+        self._playhead_active = False
 
         self.setMinimumSize(1100, 620)
         self.resize(1320, 760)
@@ -224,6 +258,15 @@ class StudioWindow(FramelessWindow):
         right.addWidget(self._row_button("open", "Open", color, self.open_macro))
         right.addWidget(self._row_button("save", "Save", color, self.save_macro))
         right.addWidget(self._row_button("editor", "Editor", color, self.open_editor))
+
+        right.addSpacing(6)
+        right.addWidget(_heading("Tools"))
+        right.addWidget(self._row_button("library", "Library", color, self.open_library))
+        right.addWidget(self._row_button("play", "Playlist", color, self.open_playlist))
+        right.addWidget(self._row_button("scheduler", "Scheduler", color, self.open_scheduler))
+        right.addWidget(self._row_button("logs", "Log Viewer", color, self.open_logs))
+        right.addWidget(self._row_button("validate", "Validate", color, self.validate_macro))
+        right.addWidget(self._row_button("add_file", "Export…", color, self.export_macro_runner))
         right.addStretch(1)
         right.addWidget(self._row_button("switch", "Switch to Classic UI", color, self._go_classic))
         right_wrap = QWidget()
@@ -309,6 +352,11 @@ class StudioWindow(FramelessWindow):
             return
         self._target_hwnd = picker.selected
         self._target_title = picker.selected_title
+        # Remember where the window was before we move it, to restore on undock.
+        try:
+            self._pre_dock_rect = self.backend.window_client_rect(self._target_hwnd)
+        except Exception:  # noqa: BLE001
+            self._pre_dock_rect = None
         self.macro = self.macro.copy_with(target_window=self._target_title)
         self.dock.set_docked(True)
         self.dock_btn.setText("Undock Window")
@@ -318,6 +366,14 @@ class StudioWindow(FramelessWindow):
 
     def _undock(self) -> None:
         title = self._target_title
+        hwnd = self._target_hwnd
+        # Put the window back where it was before docking (if enabled).
+        if hwnd and self.settings.restore_window_on_undock and self._pre_dock_rect:
+            try:
+                self.backend.move_resize_window(hwnd, *self._pre_dock_rect)
+            except Exception as exc:  # noqa: BLE001
+                self.log.warning("Restoring window on undock failed: %s", exc)
+        self._pre_dock_rect = None
         self._target_hwnd = None
         self.dock.set_docked(False)
         self.dock_btn.setText("Dock Window")
@@ -347,7 +403,10 @@ class StudioWindow(FramelessWindow):
 
     def toggle_playback(self) -> None:
         if self.player.state.playing:
-            self.player.stop()
+            if self.player.state.paused:
+                self.player.resume()  # continue from a breakpoint
+            else:
+                self.player.stop()
             self._update_state()
             return
         if not self.macro.events:
@@ -357,6 +416,7 @@ class StudioWindow(FramelessWindow):
             self.backend.focus_window(self._target_hwnd)
         self.settings.loop_count = self.loop_spin.value()
         self.settings.speed = self.speed_spin.value()
+        self._prepare_playhead(True)  # a plain Play drives the editor playhead
         self.player.start(self.macro, loop_count=self.loop_spin.value(), speed=self.speed_spin.value())
         self.logs.addItem(f"▶ Playback started ×{self.loop_spin.value() or '∞'}")
         self._update_state()
@@ -369,13 +429,162 @@ class StudioWindow(FramelessWindow):
         self._update_overview()
 
     def open_editor(self) -> None:
-        dialog = EditorDialog(self.macro, self, colors=self.colors)
-        dialog.macro_changed.connect(self._replace_macro)
-        dialog.exec()
+        # A single, non-modal editor that stays open during playback: the current
+        # step is highlighted live and breakpoints pause playback.
+        if self._editor is not None:
+            self._editor.raise_()
+            self._editor.activateWindow()
+            return
+        editor = EditorDialog(self.macro, self, colors=self.colors, live=True)
+        editor.macro_changed.connect(self._replace_macro)
+        editor.breakpoints_changed.connect(self._on_breakpoints_changed)
+        editor.finished.connect(self._on_editor_closed)
+        self._editor = editor
+        editor.show()
+
+    def _on_editor_closed(self, _result: int = 0) -> None:
+        self._playhead_active = False
+        self.player.breakpoints = set()
+        self._editor = None
+
+    def _on_breakpoints_changed(self, breakpoints: set) -> None:
+        self.player.breakpoints = set(breakpoints)
+
+    def _on_step_reached(self, index: int) -> None:
+        if self._playhead_active and self._editor is not None:
+            self._editor.set_playing_index(index)
+
+    def _on_breakpoint_hit(self, index: int) -> None:
+        if self._playhead_active and self._editor is not None:
+            self._editor.set_paused_at(index)
+        self.logs.addItem(f"⏸ Breakpoint at step {index} — press Resume")
+        self._toast(f"Paused at step {index} (breakpoint) — press Resume", "info")
+        self._update_state()
+
+    def _prepare_playhead(self, active: bool) -> None:
+        """Arm/disarm the live playhead + breakpoints for the next run."""
+        self._playhead_active = active and self._editor is not None
+        if active and self._editor is not None:
+            self.player.breakpoints = set(self._editor.breakpoints)
+        else:
+            self.player.breakpoints = set()
+            if self._editor is not None:
+                self._editor.clear_playing()
 
     def _replace_macro(self, macro: Macro) -> None:
         self.macro = macro.copy_with(docked=True, target_window=self._target_title)
         self._update_overview()
+
+    @staticmethod
+    def _named_from_path(macro: Macro, path: Path) -> Macro:
+        """Adopt the file's name so the overview shows it instead of "Untitled"."""
+        if macro.name in ("", "Untitled"):
+            return macro.copy_with(name=path.stem)
+        return macro
+
+    # -- tools (Classic parity) ----------------------------------------------
+    def open_library(self) -> None:
+        dialog = LibraryDialog(self.library, self)
+        dialog.open_requested.connect(lambda p: self._load_macro_path(Path(p)))
+        dialog.play_requested.connect(self._play_path)
+        dialog.exec()
+
+    def open_playlist(self) -> None:
+        dialog = PlaylistDialog(self.library, docked=True, parent=self)
+        dialog.play_requested.connect(self._play_built_macro)
+        dialog.exec()
+
+    def _play_built_macro(self, macro: Macro) -> None:
+        """Run a macro assembled by a tool (e.g. a playlist) through the player."""
+        if not macro.events:
+            QMessageBox.information(self, "Empty", "That playlist produced no events.")
+            return
+        if self._target_hwnd is not None:
+            self.backend.focus_window(self._target_hwnd)
+        self._prepare_playhead(False)  # a stitched playlist isn't the editor's macro
+        try:
+            self.player.start(macro, loop_count=self.loop_spin.value(), speed=self.speed_spin.value())
+        except Exception as exc:  # noqa: BLE001
+            self._toast(str(exc), "error")
+            return
+        self.logs.addItem(f"▶ Playlist started ({len(macro.events)} events)")
+        self._update_state()
+
+    def open_scheduler(self) -> None:
+        SchedulerDialog(self.schedules, self).exec()
+
+    def open_logs(self) -> None:
+        LogDialog(self).exec()
+
+    def validate_macro(self) -> None:
+        if not self.macro.events:
+            QMessageBox.information(self, "No macro", "Record or open a macro first.")
+            return
+        report = simulate(self.macro)
+        summary = (
+            f"{report.event_count} events · {report.input_event_count} input · "
+            f"{report.wait_event_count} wait · {report.duration_s:.3f}s"
+        )
+        if report.ok:
+            QMessageBox.information(self, "Validation passed", f"No issues found.\n\n{summary}")
+        else:
+            QMessageBox.warning(
+                self, "Validation warnings", summary + "\n\n" + "\n".join(report.warnings)
+            )
+
+    def export_macro_runner(self) -> None:
+        if not self.macro.events:
+            QMessageBox.information(self, "No macro", "Record or open a macro first.")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Export Runner", "", "Python Runner (*.py)")
+        if not path:
+            return
+        macro = self.macro.copy_with(
+            docked=True, target_window=self._target_title,
+            speed=self.speed_spin.value(), loop_count=self.loop_spin.value(),
+        )
+        try:
+            runner, _ = export_runner(
+                macro, path, loop_count=self.loop_spin.value(), speed=self.speed_spin.value()
+            )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Export failed", str(exc))
+            return
+        self._toast(f"Exported {runner.name}", "success")
+
+    def _load_macro_path(self, path: Path) -> None:
+        try:
+            self.macro = Macro.load_for_variant(str(path), docked=True)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Cannot open", str(exc))
+            return
+        self.macro = self._named_from_path(self.macro, path)
+        self.path = path
+        self._target_title = self.macro.target_window
+        self.loop_spin.setValue(self.macro.loop_count)
+        self.speed_spin.setValue(self.macro.speed)
+        self._toast(f"Loaded {path.name}", "info")
+        self._update_overview()
+
+    def _play_path(self, path: str) -> None:
+        try:
+            macro = Macro.load_for_variant(path, docked=True)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Play failed", str(exc))
+            return
+        if self._target_hwnd is not None:
+            self.backend.focus_window(self._target_hwnd)
+        self._prepare_playhead(False)
+        try:
+            self.player.start(
+                macro, loop_count=self.loop_spin.value(), speed=self.speed_spin.value()
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._toast(str(exc), "error")
+            return
+        self.library.record_run(path)
+        self.library.save()
+        self._update_state()
 
     # -- files ----------------------------------------------------------------
     def open_macro(self) -> None:
@@ -387,6 +596,7 @@ class StudioWindow(FramelessWindow):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "Cannot open", str(exc))
             return
+        self.macro = self._named_from_path(self.macro, Path(path))
         self.path = Path(path)
         self._target_title = self.macro.target_window
         self.loop_spin.setValue(self.macro.loop_count)
@@ -400,8 +610,9 @@ class StudioWindow(FramelessWindow):
             return
         if not path.endswith(DOCK_EXTENSION):
             path += DOCK_EXTENSION
+        name = self.macro.name if self.macro.name not in ("", "Untitled") else Path(path).stem
         self.macro = self.macro.copy_with(
-            docked=True, target_window=self._target_title,
+            docked=True, target_window=self._target_title, name=name,
             speed=self.speed_spin.value(), loop_count=self.loop_spin.value(),
         )
         try:
@@ -410,16 +621,22 @@ class StudioWindow(FramelessWindow):
             QMessageBox.warning(self, "Cannot save", str(exc))
             return
         self.path = Path(path)
+        self._update_overview()
         self._toast(f"Saved {Path(path).name}", "success")
 
     # -- state / overview -----------------------------------------------------
     def _update_state(self) -> None:
         recording = self.recorder.recording
         playing = self.player.state.playing
+        if self._editor is not None and not playing:
+            self._editor.clear_playing()  # playback ended → drop the live playhead
         self.dock_btn.setText("Undock Window" if self._target_hwnd is not None else "Dock Window")
         self.record_btn.setText("  Stop Rec" if recording else "  Record")
         self.play_btn.setEnabled(bool(self.macro.events) and not recording)
-        self.play_btn.setText("  Stop" if playing else "  Play")
+        if playing and self.player.state.paused:
+            self.play_btn.setText("  Resume")  # paused at a breakpoint
+        else:
+            self.play_btn.setText("  Stop" if playing else "  Play")
 
     def _update_overview(self) -> None:
         target = self._target_title or "— none —"
@@ -438,7 +655,7 @@ class StudioWindow(FramelessWindow):
         self.dispatcher.register(DiscordNotifier(notifications.discord))
         self.dispatcher.register(GenericWebhookNotifier(notifications.generic))
 
-    def _dispatch_notifications(self, done: int, total: int) -> None:
+    def _dispatch_notifications(self, done: int, total: int, marked_shot: bytes | None) -> None:
         import threading
 
         notifications = self.settings.notifications
@@ -446,7 +663,10 @@ class StudioWindow(FramelessWindow):
             return
         screenshot = None
         if notifications.discord.include_screenshot:
-            screenshot = self.player.consume_marked_screenshot() or capture_fullscreen_png()
+            # ``marked_shot`` is the screenshot captured at the macro's screenshot
+            # step this loop, delivered with the signal so it can't be overwritten
+            # by the next loop; fall back to a fresh grab only if none was marked.
+            screenshot = marked_shot or capture_fullscreen_png()
         event = LoopEvent(
             loop_index=done,
             total_loops=total,
@@ -461,11 +681,11 @@ class StudioWindow(FramelessWindow):
             daemon=True,
         ).start()
 
-    def _on_loop_completed(self, done: int, total: int) -> None:
+    def _on_loop_completed(self, done: int, total: int, screenshot: bytes | None) -> None:
         self.logs.addItem(f"✓ Loop {done}/{total or '∞'} complete")
         while self.logs.count() > 500:
             self.logs.takeItem(0)
-        self._dispatch_notifications(done, total)
+        self._dispatch_notifications(done, total, screenshot)
         self.logs.scrollToBottom()
 
     def _on_progress(self, index: int, total: int) -> None:
@@ -506,6 +726,7 @@ class StudioWindow(FramelessWindow):
         # Re-apply everything that can change from Preferences.
         self.colors = apply_theme(QApplication.instance(), self.settings)
         self.player.allow_code_execution = self.settings.allow_code_execution
+        self.player.loop_gap_ns = self.settings.effective_loop_gap_ns
         self.recorder.skip_final_click = self.settings.skip_final_click
         self.recorder.hotkeys = self.settings.hotkeys
         self.recorder.move_min_interval_ns = self.settings.move_min_interval_ms * 1_000_000
@@ -524,6 +745,11 @@ class StudioWindow(FramelessWindow):
         if self.persist_settings and self._on_persist:
             self._on_persist()
         self.switch_variant_requested.emit("classic")
+
+    def show(self) -> None:  # noqa: D401
+        # Studio always opens maximized: the docked window fills a large, stable
+        # aperture, and the dock tracker keeps adapting if the user restores/resizes.
+        self.showMaximized()
 
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)

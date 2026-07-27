@@ -32,6 +32,30 @@ class DockRegion:
         return self.width / self.height if self.height else 0.0
 
 
+def scale_to_physical(
+    left: float, top: float, width: float, height: float, device_pixel_ratio: float
+) -> DockRegion:
+    """Convert a logical (Qt device-independent) rectangle to physical pixels.
+
+    Qt reports widget geometry in logical points, but the Windows APIs we drive
+    the docked window with — ``SetWindowPos`` — and the low-level mouse hook that
+    records pointer positions both work in physical device pixels. On a scaled
+    display (e.g. 125%) those differ, which is what made the docked window land
+    small and off-centre. Multiplying by the screen's device-pixel ratio brings
+    the region into the same physical space as everything else.
+
+    Assumes a single scale factor across the layout (true for one monitor, and for
+    multi-monitor setups where every screen shares the same scale).
+    """
+    ratio = device_pixel_ratio or 1.0
+    return DockRegion(
+        round(left * ratio),
+        round(top * ratio),
+        round(width * ratio),
+        round(height * ratio),
+    )
+
+
 def to_relative(x: int, y: int, region: DockRegion) -> tuple[float, float]:
     """Absolute screen point → (fx, fy) as fractions of ``region`` (clamped 0..1)."""
     if not region.valid:

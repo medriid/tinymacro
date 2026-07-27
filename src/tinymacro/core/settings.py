@@ -41,6 +41,14 @@ class Settings:
     # Capture / playback tuning
     move_min_interval_ms: int = 0
     humanize_jitter_ms: int = 0
+    # A short settling pause inserted between loop iterations so each loop starts
+    # from a clean, fresh state instead of blurring into the next. ``loop_gap_ms``
+    # is the pause length; ``loop_gap_enabled`` toggles it on/off (default on).
+    loop_gap_enabled: bool = True
+    loop_gap_ms: int = 40
+    # Studio: put the target window back to its original size/position on undock
+    # (remembered at dock time). Off leaves it filling the aperture.
+    restore_window_on_undock: bool = True
     # Recording quality-of-life
     record_countdown: int = 0  # seconds counted down before capture starts
     auto_trim_leading: bool = False  # drop idle time before the first action
@@ -62,6 +70,11 @@ class Settings:
     def webhook(self, value) -> None:
         self.notifications.discord = value
 
+    @property
+    def effective_loop_gap_ns(self) -> int:
+        """Playback gap between loops in ns — zero when the toggle is off."""
+        return self.loop_gap_ms * 1_000_000 if self.loop_gap_enabled else 0
+
     def validate(self) -> None:
         if self.theme not in {"system", "light", "dark"}:
             raise ValueError("Invalid theme")
@@ -77,6 +90,8 @@ class Settings:
             raise ValueError("Move sampling interval must be zero or positive")
         if self.humanize_jitter_ms < 0:
             raise ValueError("Humanize jitter must be zero or positive")
+        if self.loop_gap_ms < 0:
+            raise ValueError("Loop gap must be zero or positive")
         if self.record_countdown < 0:
             raise ValueError("Record countdown must be zero or positive")
         if not (0.5 <= self.ui_scale <= 2.0):
@@ -110,6 +125,9 @@ class Settings:
             "ui_variant": self.ui_variant,
             "move_min_interval_ms": self.move_min_interval_ms,
             "humanize_jitter_ms": self.humanize_jitter_ms,
+            "loop_gap_enabled": self.loop_gap_enabled,
+            "loop_gap_ms": self.loop_gap_ms,
+            "restore_window_on_undock": self.restore_window_on_undock,
             "record_countdown": self.record_countdown,
             "auto_trim_leading": self.auto_trim_leading,
             "autosave_seconds": self.autosave_seconds,
@@ -139,6 +157,9 @@ class Settings:
             ui_variant=str(data.get("ui_variant", "classic")),
             move_min_interval_ms=int(data.get("move_min_interval_ms", 0)),
             humanize_jitter_ms=int(data.get("humanize_jitter_ms", 0)),
+            loop_gap_enabled=bool(data.get("loop_gap_enabled", True)),
+            loop_gap_ms=int(data.get("loop_gap_ms", 40)),
+            restore_window_on_undock=bool(data.get("restore_window_on_undock", True)),
             record_countdown=int(data.get("record_countdown", 0)),
             auto_trim_leading=bool(data.get("auto_trim_leading", False)),
             autosave_seconds=int(data.get("autosave_seconds", 30)),

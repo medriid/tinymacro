@@ -32,7 +32,7 @@ def _play(macro, loops, speed=1.0):
         backend,
         clock_ns=lambda: clock[0],
         sleeper=lambda s: clock.__setitem__(0, clock[0] + int(s * 1e9)),
-        on_loop_complete=lambda d, t, s, m: completions.append(clock[0]),
+        on_loop_complete=lambda d, t, s, m, shot: completions.append(clock[0]),
     )
     player.on_error = lambda exc: (_ for _ in ()).throw(exc)
     player.start(macro, loop_count=loops, speed=speed, blocking=True)

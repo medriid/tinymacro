@@ -35,11 +35,27 @@ def test_studio_constructs_and_dock_region(qtbot):
     win.resize(1160, 660)
     win.show()
     region = win.dock.region()
+    dpr = win.dock.inner.devicePixelRatioF()
     assert isinstance(region, DockRegion)
-    assert region.width == win.dock.inner.width()
-    assert region.height == win.dock.inner.height()
+    # The aperture is reported in physical pixels (logical size × device ratio).
+    assert region.width == round(win.dock.inner.width() * dpr)
+    assert region.height == round(win.dock.inner.height() * dpr)
     assert region.width > 500
     assert region.height > 400
+
+
+def test_dock_region_scales_with_device_pixel_ratio(qtbot, monkeypatch):
+    # On a scaled display the aperture is reported in physical pixels, so the
+    # docked window (placed via physical-pixel SetWindowPos) fills it.
+    win = StudioWindow(Settings(), FakeBackend(), persist_settings=False)
+    qtbot.addWidget(win)
+    win.resize(1160, 660)
+    win.show()
+    inner = win.dock.inner
+    monkeypatch.setattr(inner, "devicePixelRatioF", lambda: 1.25)
+    region = win.dock.region()
+    assert region.width == round(inner.width() * 1.25)
+    assert region.height == round(inner.height() * 1.25)
 
 
 def test_studio_makes_dock_macros(qtbot, tmp_path):
@@ -104,3 +120,59 @@ def test_studio_tracks_exact_dock_aperture(qtbot):
 
 def test_dock_extension():
     assert DOCK_EXTENSION == ".tmacd"
+
+
+def test_studio_opens_maximized(qtbot):
+    win = StudioWindow(Settings(), FakeBackend(), persist_settings=False)
+    qtbot.addWidget(win)
+    win.show()
+    assert win.isMaximized()
+
+
+def test_titlebar_max_restore_icon_swaps(qtbot):
+    win = StudioWindow(Settings(), FakeBackend(), persist_settings=False)
+    qtbot.addWidget(win)
+    win.title_bar.update_max_restore(True)
+    assert win.title_bar.btn_max.toolTip() == "Restore"
+    win.title_bar.update_max_restore(False)
+    assert win.title_bar.btn_max.toolTip() == "Maximize"
+
+
+class _RestoreBackend(FakeBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.moves: list[tuple[int, int, int, int, int]] = []
+
+    def supports_docking(self) -> bool:
+        return True
+
+    def window_client_rect(self, handle: int):
+        return (100, 200, 800, 600)
+
+    def move_resize_window(self, handle: int, left: int, top: int, width: int, height: int) -> bool:
+        self.moves.append((handle, left, top, width, height))
+        return True
+
+
+def test_undock_restores_window_geometry(qtbot):
+    backend = _RestoreBackend()
+    win = StudioWindow(Settings(), backend, persist_settings=False)
+    qtbot.addWidget(win)
+    win._target_hwnd = 55
+    win._pre_dock_rect = (100, 200, 800, 600)
+    win.settings.restore_window_on_undock = True
+    win._undock()
+    assert (55, 100, 200, 800, 600) in backend.moves
+    assert win._target_hwnd is None
+    assert win._pre_dock_rect is None
+
+
+def test_undock_skips_restore_when_disabled(qtbot):
+    backend = _RestoreBackend()
+    win = StudioWindow(Settings(), backend, persist_settings=False)
+    qtbot.addWidget(win)
+    win._target_hwnd = 55
+    win._pre_dock_rect = (100, 200, 800, 600)
+    win.settings.restore_window_on_undock = False
+    win._undock()
+    assert backend.moves == []

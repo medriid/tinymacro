@@ -6,7 +6,7 @@ the event's index so the editor can select the matching table row.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import QWidget
 
@@ -40,6 +40,7 @@ class TimelineWidget(QWidget):
         self._kind_colors = dict(kind_colors or {})
         self._pps = 120.0  # pixels per second (zoom)
         self._selected = -1
+        self._playing = -1  # source index currently executing during playback
         self.setMinimumHeight(_TOP + _TRACK_H + 18)
         self.setMouseTracking(True)
 
@@ -55,6 +56,13 @@ class TimelineWidget(QWidget):
 
     def set_selected(self, index: int) -> None:
         self._selected = index
+        self.update()
+
+    def set_playing(self, index: int) -> None:
+        """Mark the step currently executing during playback (-1 to clear)."""
+        if index == self._playing:
+            return
+        self._playing = index
         self.update()
 
     def set_zoom(self, pixels_per_second: float) -> None:
@@ -133,4 +141,17 @@ class TimelineWidget(QWidget):
                 painter.setPen(palette.highlight().color())
                 painter.drawRect(QRectF(x - 3, _TOP - 3, 6, _TRACK_H + 6))
                 painter.setPen(Qt.PenStyle.NoPen)
+
+        # Playhead: a bright vertical line + top caret at the executing step, drawn
+        # last so it sits above every tick.
+        if 0 <= self._playing < len(events):
+            px = _LEFT + (events[self._playing].timestamp_ns / _NS) * self._pps
+            play_color = QColor("#28c76f")
+            painter.setPen(play_color)
+            painter.drawLine(int(px), _TOP - 4, int(px), baseline)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(play_color)
+            caret = [QPointF(px + dx, _TOP - 6 + dy) for dx, dy in ((-4, -2), (4, -2), (0, 4))]
+            painter.drawPolygon(*caret)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.end()

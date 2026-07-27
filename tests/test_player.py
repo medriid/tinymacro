@@ -74,7 +74,7 @@ def test_player_calls_loop_complete_after_each_loop():
     calls = []
     macro = Macro(events=[MacroEvent(10_000_000, "key", "press", key="a")])
     player = Player(backend, clock_ns=clock, sleeper=clock.sleep)
-    player.on_loop_complete = lambda loop, total, speed, played: calls.append((loop, total, speed, played.duration_ns))
+    player.on_loop_complete = lambda loop, total, speed, played, shot: calls.append((loop, total, speed, played.duration_ns))
 
     player.start(macro, loop_count=2, speed=1.0, blocking=True)
 

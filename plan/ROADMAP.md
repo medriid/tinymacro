@@ -5,7 +5,7 @@ to build next, what to improve, and how to develop/build/release.
 
 ---
 
-## Current state (shipped in v0.1.1.1)
+## Current state (shipped in v0.1.2)
 
 - **Two UI variants** (both frameless, custom title bar/icons, animations):
   - **Classic** — compact toolbar UI, absolute-coordinate macros (`.tmacc`).
@@ -16,9 +16,30 @@ to build next, what to improve, and how to develop/build/release.
     Preferences, and the same global hotkeys as Classic.
 - **Playback engine**: deterministic, absolute-time-anchored scheduling;
   captures leading/trailing idle as wait steps so loop time includes idle and
-  loops don't speed up. Precise timing (fine sleeps + Windows 1ms timer via
-  `timeBeginPeriod`), verified stable and leak-free across 100+ loops.
-  Control-flow interpreter for `if/else/endif` + `loop`.
+  loops don't speed up. **Sub-millisecond precise timing** — each event's
+  deadline is anchored to a per-loop start and the final slice is busy-spun on a
+  high-res clock (with the Windows 1ms timer via `timeBeginPeriod`), so every
+  loop replays identically (measured stdev ~0.005 ms across loops) and small
+  inter-event pauses are honored. The control-flow interpreter advances a running
+  target clock so `if/else/endif` + `loop` timing doesn't drift either.
+  **Fresh loops**: an optional (default-on) settling gap between iterations and a
+  release of any keys/buttons left held, so each loop starts clean.
+- **Playlists**: chain several macros to play back-to-back (`core/playlist.py` +
+  `PlaylistDialog`, `.tmplist` files) with per-item repeat and an inter-macro gap;
+  variant-scoped (classic/Studio). Surfaced in both UIs; the stitched macro runs
+  through the normal player, so loop/speed/notifications apply to the whole set.
+- **Live debugging editor**: the Macro Editor is non-modal and can stay open while
+  a macro plays. It highlights the executing step in the event tree and the
+  timeline (a green playhead), and supports **breakpoints** (right-click → Toggle
+  Breakpoint) that auto-pause playback at a step (amber highlight) with Resume.
+  Edits apply to the host live; the timeline gained a `set_playing` marker.
+- **DPI-correct docking**: the Studio aperture is reported in physical pixels
+  (`dock.scale_to_physical`), so on a scaled display (e.g. 125%) the docked window
+  fills and centres correctly and recorded clicks land right — Studio macros are
+  truly resolution-independent. Studio now opens **maximized**; undock restores the
+  target window to where it was (Preferences toggle).
+- **Window chrome**: the title-bar maximize button swaps between a full-window and
+  a restore (two-window) glyph to mirror the window state, in both UIs.
 - **Recording fidelity**: only the *full* global-hotkey chord is swallowed, so
   plain letters used in a chord (c/r/s/p/m) and lone modifiers (Ctrl for
   Ctrl+C in the target app) record correctly.
@@ -44,19 +65,23 @@ to build next, what to improve, and how to develop/build/release.
 0. **Install manager + auto-update** (big; see "Distribution" below) — ship an
    installer and a self-updater so users download once and always get the latest
    app, and their macros sync/update whenever they connect.
-1. **Studio parity with Classic tools** — expose Library, Scheduler, Log Viewer,
-   Validate (dry-run), and Export from the Studio side panel (currently
-   Classic-only via its menus).
-2. **Region-capture tool** for click-image / wait-pixel — drag a rectangle on
-   screen to grab the target image/color instead of picking a file.
-3. **Live current-step highlight** during playback in the editor + a non-modal
-   editor so it can stay open while a macro runs (enables breakpoints).
-4. **Undock leaves the target where it is** — optionally restore the target
-   window's original size/position on undock (remember it at dock time).
+1. ~~**Studio parity with Classic tools**~~ — **done**: Library, Scheduler, Log
+   Viewer, Validate, Export (and now Playlist) are in the Studio side panel.
+2. ~~**Region-capture tool**~~ — **done**: `gui/region_capture.py` drag-to-snip
+   feeds click-image and wait-pixel steps.
+3. ~~**Live current-step highlight** during playback + non-modal editor~~ —
+   **done**: the editor is non-modal (live two-way sync, `show()` not `exec()`),
+   the executing step is highlighted in the tree and timeline (green playhead), and
+   **breakpoints** (right-click → Toggle Breakpoint) auto-pause playback (amber
+   highlight) with Resume in both UIs. Player hooks: `on_step` / `on_breakpoint` /
+   `breakpoints`.
+4. ~~**Undock leaves the target where it is**~~ — **done**: the target window's
+   client rect is captured at dock time and restored on undock (toggle in
+   Preferences, default on).
 5. **Studio: aspect-ratio lock options** (16:9 / match-target / free) for the
    dock aperture.
-6. **Macro chaining / playlists in the UI** (core `Macro.then/chain/repeated`
-   already exist — surface them).
+6. ~~**Macro chaining / playlists in the UI**~~ — **done**: `core/playlist.py` +
+   `PlaylistDialog` (`.tmplist`), surfaced in both UIs.
 7. **GIF/preview export** of a macro (was deferred; needs Pillow/imageio).
 8. **First-run onboarding** + a few bundled sample macros.
 
@@ -188,8 +213,9 @@ py -3.14 -m venv .venv
 ## Architecture map
 
 - `core/` — `events.py` (MacroEvent), `macro.py` (Macro + formats), `recorder.py`,
-  `player.py` (scheduled + control-flow execution), `dock.py` (relative coords),
-  `vision.py`, `scheduler.py` + `image_watcher.py`, `settings.py`, `hotkeys.py`.
+  `player.py` (scheduled + control-flow execution, precise timing), `playlist.py`
+  (chain macros into one run), `dock.py` (relative coords), `vision.py`,
+  `scheduler.py` + `image_watcher.py`, `settings.py`, `hotkeys.py`.
 - `backends/` — `base.py`, `windows.py`, `evdev_wayland.py`, `x11.py`, `fake.py`.
 - `gui/` — `app.py` (bootstrap + variant switch), `main_window.py` (Classic),
   `studio_window.py` (Studio), `framed_window.py` (frameless chrome), `anim.py`,

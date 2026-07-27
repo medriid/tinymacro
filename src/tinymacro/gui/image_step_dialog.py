@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
 
 from tinymacro.core.events import DEFAULT_CONFIDENCE, DEFAULT_TIMEOUT_MS, MacroEvent
 from tinymacro.gui.icons import get_icon
+from tinymacro.gui.region_capture import capture_region_png
 from tinymacro.gui.theme import icon_color
 
 _THUMB_W, _THUMB_H = 220, 150
@@ -50,6 +51,14 @@ class ImageStepDialog(QDialog):
 
         choose = QPushButton(get_icon("image", color), "Choose Image…")
         choose.clicked.connect(self._choose_image)
+        grab = QPushButton(get_icon("crop", color), "Grab from Screen…")
+        grab.setToolTip("Drag a rectangle on screen to capture the target image")
+        grab.clicked.connect(self._grab_region)
+        source_row = QHBoxLayout()
+        source_row.addStretch(1)
+        source_row.addWidget(choose)
+        source_row.addWidget(grab)
+        source_row.addStretch(1)
 
         self.confidence = QDoubleSpinBox()
         self.confidence.setRange(0.50, 1.00)
@@ -111,7 +120,7 @@ class ImageStepDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.preview, alignment=Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(choose, alignment=Qt.AlignmentFlag.AlignCenter)
+        layout.addLayout(source_row)
         layout.addLayout(form)
         layout.addWidget(self.buttons)
 
@@ -135,6 +144,17 @@ class ImageStepDialog(QDialog):
         buffer.close()
         self._image_b64 = base64.b64encode(bytes(data)).decode("ascii")
         self._refresh_preview()
+
+    def _grab_region(self) -> None:
+        # Hide our own window so it isn't in the frozen screenshot.
+        self.hide()
+        try:
+            b64 = capture_region_png(self)
+        finally:
+            self.show()
+        if b64:
+            self._image_b64 = b64
+            self._refresh_preview()
 
     def _refresh_preview(self) -> None:
         has_image = bool(self._image_b64)
