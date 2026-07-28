@@ -39,6 +39,27 @@ _HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 
 _DEFAULT_KIND_COLORS = {"key": "#ffffff", "mouse": "#e0913a", "wheel": "#8a7de0", "wait": "#2f9e6f"}
 
+# Transport buttons read at a glance from their colour alone: record is orange,
+# play green, stop red, pause a calm blue. These are the *defaults* — a custom
+# theme's ``button_colors`` still wins (see :func:`resolve_button_color`).
+DEFAULT_BUTTON_COLORS = {
+    "record": "#e8833a",
+    "play": "#35b87a",
+    "stop": "#e0554e",
+    "pause": "#4f9dde",
+}
+
+
+def resolve_button_color(theme: "Theme | None", name: str, fallback: str) -> str:
+    """The colour for button ``name``: theme override → built-in default → fallback.
+
+    Single source of truth for both UIs so custom themes always take precedence
+    over the built-in transport colours.
+    """
+    if theme is not None and name in theme.button_colors:
+        return theme.button_colors[name]
+    return DEFAULT_BUTTON_COLORS.get(name, fallback)
+
 
 class ThemeError(ValueError):
     """Raised when a theme is structurally invalid or unsafe to load."""

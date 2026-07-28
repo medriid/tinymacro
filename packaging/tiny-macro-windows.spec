@@ -6,7 +6,10 @@ from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
 project_root = Path(SPECPATH).parent
-icons_dir = project_root / "src" / "tinymacro" / "gui" / "icons"
+gui_dir = project_root / "src" / "tinymacro" / "gui"
+icons_dir = gui_dir / "icons"
+sounds_dir = gui_dir / "sounds"
+fonts_dir = gui_dir / "fonts"
 app_ico = icons_dir / "app" / "app.ico"
 
 hiddenimports = [
@@ -14,12 +17,17 @@ hiddenimports = [
     "PyQt6.QtGui",
     "PyQt6.QtWidgets",
     "PyQt6.QtSvg",
+    "PyQt6.QtMultimedia",
     "numpy",
     "tinymacro.backends.windows",
     "tinymacro.gui.app",
 ]
 
 datas = [(str(icons_dir), "tinymacro/gui/icons")]
+# UI feedback sounds and any bundled typeface travel with the app.
+for _src, _dest in ((sounds_dir, "tinymacro/gui/sounds"), (fonts_dir, "tinymacro/gui/fonts")):
+    if _src.is_dir():
+        datas.append((str(_src), _dest))
 binaries = []
 
 # Bundle the optional vision stack (click-image + image-trigger scheduler).

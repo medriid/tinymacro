@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from PyQt6.QtCore import QObject, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPalette
@@ -19,12 +20,40 @@ PRESET_ACCENTS = {
 }
 
 # A refined, cross-platform UI font stack (Qt picks the first family installed).
-# Prefers the crisp modern system faces on each OS, then good open fallbacks.
+#
+# Order matters: the OS defaults (Segoe UI / SF / Ubuntu) sit *after* the crafted
+# faces, so the app doesn't just inherit the stock system look. Drop an Inter (or
+# any other) font file into ``gui/fonts`` and :func:`load_bundled_fonts` registers
+# it at startup, making the whole UI use it on every machine.
 UI_FONT_STACK = (
-    '"Segoe UI Variable Text", "Inter", "SF Pro Text", "Segoe UI", '
-    '"Ubuntu", "Cantarell", "Noto Sans", "DejaVu Sans", "Helvetica Neue", '
-    "Arial, sans-serif"
+    '"Inter", "Inter Display", "InterVariable", "SF Pro Text", '
+    '"Segoe UI Variable Text", "Segoe UI", "Ubuntu", "Cantarell", '
+    '"Noto Sans", "DejaVu Sans", "Helvetica Neue", Arial, sans-serif'
 )
+
+# Directory scanned for bundled font files (packaged alongside the icons).
+FONT_DIR = Path(__file__).resolve().parent / "fonts"
+
+
+def load_bundled_fonts() -> list[str]:
+    """Register any bundled .ttf/.otf with Qt; returns the families added.
+
+    Lets Tiny Macro ship its own typeface so the UI looks identical everywhere
+    instead of falling back to whatever the OS provides. Missing directory or
+    unreadable files are ignored — the stack above then degrades to system faces.
+    """
+    from PyQt6.QtGui import QFontDatabase
+
+    families: list[str] = []
+    if not FONT_DIR.is_dir():
+        return families
+    for path in sorted(FONT_DIR.iterdir()):
+        if path.suffix.lower() not in (".ttf", ".otf"):
+            continue
+        font_id = QFontDatabase.addApplicationFont(str(path))
+        if font_id != -1:
+            families.extend(QFontDatabase.applicationFontFamilies(font_id))
+    return families
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +262,15 @@ def _stylesheet(c: ThemeColors, scale: float = 1.0, density: str = "comfortable"
             font-family: {font_family};
             font-size: {font_px}px;
             color: {c.text};
+        }}
+        /* Typography: slightly tighter, heavier control text reads as designed
+           rather than stock. Studio's section headings set their own style. */
+        QPushButton, QToolButton, QComboBox, QSpinBox, QDoubleSpinBox,
+        QLineEdit, QCheckBox, QTabBar::tab, QHeaderView::section {{
+            letter-spacing: 0.2px;
+        }}
+        QLabel {{
+            letter-spacing: 0.1px;
         }}
         QMainWindow, QDialog {{
             background: {window_bg};

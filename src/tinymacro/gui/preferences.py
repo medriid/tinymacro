@@ -134,6 +134,9 @@ class PreferencesDialog(QDialog):
         self.compact_mode.setChecked(s.compact_mode)
         self.animations = QCheckBox()
         self.animations.setChecked(s.animations)
+        self.ui_sounds = QCheckBox()
+        self.ui_sounds.setChecked(s.ui_sounds)
+        self.ui_sounds.setToolTip("Subtle hover and click sounds on buttons.")
         self.ui_scale = QDoubleSpinBox()
         self.ui_scale.setRange(0.8, 1.8)
         self.ui_scale.setSingleStep(0.1)
@@ -160,6 +163,7 @@ class PreferencesDialog(QDialog):
         form.addRow("Custom themes", self._row(self.theme_editor_btn, self._active_theme_label))
         form.addRow("Start in compact mode", self.compact_mode)
         form.addRow("Enable animations", self.animations)
+        form.addRow("Interface sounds", self.ui_sounds)
         return _wrap(form)
 
     def _build_capture_tab(self) -> QWidget:
@@ -316,6 +320,7 @@ class PreferencesDialog(QDialog):
             s.accent_color = self.accent_color.text().strip()
             s.compact_mode = self.compact_mode.isChecked()
             s.animations = self.animations.isChecked()
+            s.ui_sounds = self.ui_sounds.isChecked()
             s.ui_scale = self.ui_scale.value()
             s.density = self.density.currentText()
             s.backend = self.backend.currentText()

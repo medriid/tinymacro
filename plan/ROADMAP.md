@@ -5,7 +5,7 @@ to build next, what to improve, and how to develop/build/release.
 
 ---
 
-## Current state (shipped in v0.1.4)
+## Current state (shipped in v0.1.5)
 
 - **Two UI variants** (both frameless, custom title bar/icons, animations):
   - **Classic** — compact toolbar UI, absolute-coordinate macros (`.tmacc`).
@@ -67,6 +67,14 @@ to build next, what to improve, and how to develop/build/release.
   fill-when-pinned icon; Studio keeps its taskbar icon; the redundant Classic
   title label is gone. **Docs**: Preferences → Docs opens a categorised in-app
   help window (`gui/docs_dialog.py`; sections scaffolded, content TBD).
+- **Interaction feedback**: transport buttons carry built-in colours (record
+  orange, play green, stop red, pause blue) via `theme_pack.DEFAULT_BUTTON_COLORS`
+  — custom themes' `button_colors` still override. Buttons glow/ring on hover and
+  press (`anim.AnimatedToolButton`, `anim.InteractionFx`) and play subtle
+  hover/click sounds (`gui/sounds.py`, throttled, Preferences → Interface sounds).
+  Studio's Record/Play/Pause share one icon-only row. Fonts: the stack prefers
+  crafted faces over OS defaults and `theme.load_bundled_fonts()` registers any
+  typeface dropped in `gui/fonts/` so the UI can look identical on every machine.
 - **Recording fidelity**: only the *full* global-hotkey chord is swallowed, so
   plain letters used in a chord (c/r/s/p/m) and lone modifiers (Ctrl for
   Ctrl+C in the target app) record correctly.

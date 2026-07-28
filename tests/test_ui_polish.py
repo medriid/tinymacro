@@ -8,7 +8,7 @@ from tinymacro.backends.fake import FakeBackend
 from tinymacro.core.events import MacroEvent
 from tinymacro.core.macro import Macro
 from tinymacro.core.settings import Settings
-from tinymacro.core.theme_pack import Background, Theme
+from tinymacro.core.theme_pack import DEFAULT_BUTTON_COLORS, Background, Theme
 from tinymacro.gui.color_picker import ColorPickerDialog
 from tinymacro.gui.main_window import MainWindow
 from tinymacro.gui.studio_window import StudioWindow
@@ -113,8 +113,11 @@ def test_button_color_uses_theme_override(qtbot, tmp_path):
     apply_theme(QApplication.instance(), settings)
     win = MainWindow(settings, FakeBackend(), persist_settings=False)
     qtbot.addWidget(win)
-    assert win._button_color("play") == "#123456"
-    assert win._button_color("record") == win._icon_color()  # no override → default
+    assert win._button_color("play") == "#123456"  # theme override wins
+    # No override → the built-in transport default (record is orange).
+    assert win._button_color("record") == DEFAULT_BUTTON_COLORS["record"]
+    # A button with neither an override nor a default falls back to the icon tint.
+    assert win._button_color("open") == win._icon_color()
     # Reset global theme for other tests.
     settings.active_theme = ""
     apply_theme(QApplication.instance(), settings)

@@ -34,6 +34,7 @@ from tinymacro.backends.factory import create_backend
 from tinymacro.core.library import MacroLibrary
 from tinymacro.core.logging_setup import get_logger
 from tinymacro.core.macro import CLASSIC_EXTENSION, LEGACY_CLASSIC_EXTENSION, Macro
+from tinymacro.core.theme_pack import resolve_button_color
 from tinymacro.core.player import Player, simulate
 from tinymacro.core.recorder import Recorder
 from tinymacro.core.image_watcher import ImageWatcher
@@ -42,6 +43,7 @@ from tinymacro.core.settings import Settings
 from tinymacro.core.vision import CAPTURE_AVAILABLE, Locator, capture_fullscreen_png
 from tinymacro.desktop import install_file_association
 from tinymacro.export import export_runner
+from tinymacro.gui.anim import InteractionFx
 from tinymacro.gui.framed_window import FramelessWindow
 from tinymacro.gui.editor import EditorDialog
 from tinymacro.gui.icons import app_icon, get_icon
@@ -51,6 +53,7 @@ from tinymacro.gui.log_dialog import LogDialog
 from tinymacro.gui.onboarding import OnboardingOverlay, OnboardingStep
 from tinymacro.gui.preferences import PreferencesDialog
 from tinymacro.gui.scheduler_dialog import SchedulerDialog
+from tinymacro.gui.sounds import ui_sounds
 from tinymacro.gui.theme import apply_theme, current_theme, theme_manager
 from tinymacro.gui.themed_background import ThemedBackground
 from tinymacro.gui.toast import ToastManager
@@ -151,6 +154,8 @@ class MainWindow(FramelessWindow):
         self._step_index = 0
         # Icon-bearing widgets, so a theme change can re-tint them all at once.
         self._icon_actions: dict[QAction, str] = {}
+        # Hover tint + hover/click sounds for toolbar buttons.
+        self._fx = InteractionFx(self)
 
         # Image-trigger scheduler: a background watcher fires macros when their
         # target image appears. The watcher runs only when there are usable
@@ -212,14 +217,16 @@ class MainWindow(FramelessWindow):
         return getattr(self.colors, "text", None) or "#888888"
 
     def _action(self, icon_name: str, tooltip: str, checkable: bool = False) -> QAction:
-        action = QAction(get_icon(icon_name, self._icon_color()), "", self)
+        # Tint from _button_color (not the plain icon colour) so transport actions
+        # start in their own hue — the same source _on_theme_changed re-tints with.
+        action = QAction(get_icon(icon_name, self._button_color(icon_name)), "", self)
         action.setToolTip(tooltip)
         action.setCheckable(checkable)
         self._icon_actions[action] = icon_name
         return action
 
     def _menu_action(self, menu, icon_name: str, text: str, slot) -> QAction:
-        action = menu.addAction(get_icon(icon_name, self._icon_color()), text, slot)
+        action = menu.addAction(get_icon(icon_name, self._button_color(icon_name)), text, slot)
         self._icon_actions[action] = icon_name
         return action
 
@@ -241,11 +248,8 @@ class MainWindow(FramelessWindow):
         self.top_action.setToolTip("Always on top: on" if pinned else "Always on top: off")
 
     def _button_color(self, name: str) -> str:
-        """A button's icon colour: the theme's per-button override, or the default."""
-        theme = current_theme()
-        if theme is not None and name in theme.button_colors:
-            return theme.button_colors[name]
-        return self._icon_color()
+        """A button's icon colour: theme override → transport default → icon tint."""
+        return resolve_button_color(current_theme(), name, self._icon_color())
 
     def _on_theme_changed(self, colors) -> None:
         self.colors = colors
@@ -343,6 +347,7 @@ class MainWindow(FramelessWindow):
         self.library_action.triggered.connect(self.open_library)
         self.pref_action.triggered.connect(self.open_preferences)
         self.top_action.triggered.connect(self.toggle_always_on_top)
+
         # The pin (always-on-top) button is managed manually so its *icon* is the
         # only pinned indicator (filled vs outline) — the button keeps the normal
         # greyish look even when checked, instead of turning into an accent block.
@@ -356,6 +361,18 @@ class MainWindow(FramelessWindow):
                 "QToolButton:checked:hover { border-color: palette(highlight); }"
             )
         self._update_pin_button()
+
+        # Hover tint + hover/click sounds on the toolbar buttons. Transport
+        # buttons glow in their own colour (record orange, play green…); the rest
+        # use the theme accent. Attached *after* the pin styling above so the
+        # pin's own stylesheet isn't captured and then restored away by the hover
+        # tint — the pin gets sounds only (no accent → _tint leaves it alone).
+        for action, name in self._icon_actions.items():
+            widget = toolbar.widgetForAction(action)
+            if widget is not None:
+                self._fx.attach(widget, self._button_color(name))
+        if self.top_button is not None:
+            self._fx.attach(self.top_button)
 
     def _build_menu(self) -> None:
         file_menu = self.menu_bar().addMenu("File")
@@ -880,6 +897,7 @@ class MainWindow(FramelessWindow):
             self._persist()
             self.player.allow_code_execution = self.settings.allow_code_execution
             self.player.loop_gap_ns = self.settings.effective_loop_gap_ns
+            ui_sounds().set_enabled(self.settings.ui_sounds)
             self._sync_playback_controls_from_settings()
             app = QApplication.instance()
             if app:

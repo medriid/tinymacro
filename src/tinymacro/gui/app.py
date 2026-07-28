@@ -14,13 +14,15 @@ from tinymacro.core.scheduler import ScheduleStore
 from tinymacro.gui.icons import app_icon
 from tinymacro.gui.main_window import MainWindow
 from tinymacro.gui.studio_window import StudioWindow
-from tinymacro.gui.theme import apply_theme
+from tinymacro.gui.sounds import ui_sounds
+from tinymacro.gui.theme import apply_theme, load_bundled_fonts
 
 
 def run_app(initial_macro: Path | None = None, backend_name: str = "auto") -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Tiny Macro")
     app.setWindowIcon(app_icon())
+    load_bundled_fonts()  # register any shipped typeface before the theme is built
 
     profiles = ProfileStore.load()
     settings = profiles.current
@@ -34,6 +36,7 @@ def run_app(initial_macro: Path | None = None, backend_name: str = "auto") -> in
     library = MacroLibrary.load()
     schedules = ScheduleStore.load()
 
+    ui_sounds().set_enabled(settings.ui_sounds)
     colors = apply_theme(app, settings)
     try:
         backend = create_backend(settings.backend)

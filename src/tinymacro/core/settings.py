@@ -36,6 +36,7 @@ class Settings:
     active_theme: str = ""
     compact_mode: bool = True
     animations: bool = True
+    ui_sounds: bool = True  # subtle hover/click feedback sounds
     tray_enabled: bool = True
     ui_scale: float = 1.0  # font/scale multiplier for accessibility
     density: str = "comfortable"  # "comfortable" | "compact" control padding
@@ -129,6 +130,7 @@ class Settings:
             "active_theme": self.active_theme,
             "compact_mode": self.compact_mode,
             "animations": self.animations,
+            "ui_sounds": self.ui_sounds,
             "tray_enabled": self.tray_enabled,
             "ui_scale": self.ui_scale,
             "density": self.density,
@@ -164,6 +166,7 @@ class Settings:
             active_theme=str(data.get("active_theme", "")),
             compact_mode=bool(data.get("compact_mode", True)),
             animations=bool(data.get("animations", True)),
+            ui_sounds=bool(data.get("ui_sounds", True)),
             tray_enabled=bool(data.get("tray_enabled", True)),
             ui_scale=float(data.get("ui_scale", 1.0)),
             density=str(data.get("density", "comfortable")),

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QPoint, QRect, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, QPoint, QRect, QSize, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QRegion
 from PyQt6.QtWidgets import (
     QApplication,
@@ -33,6 +33,7 @@ from tinymacro.core.dock import DockRegion, scale_to_physical
 from tinymacro.core.library import MacroLibrary
 from tinymacro.core.logging_setup import get_logger
 from tinymacro.core.macro import DOCK_EXTENSION, Macro
+from tinymacro.core.theme_pack import resolve_button_color
 from tinymacro.core.player import Player, simulate
 from tinymacro.core.recorder import Recorder
 from tinymacro.core.scheduler import ScheduleStore
@@ -42,7 +43,7 @@ from tinymacro.export import export_runner
 from tinymacro.notifications.base import LoopEvent, NotificationDispatcher
 from tinymacro.notifications.discord_notifier import DiscordNotifier
 from tinymacro.notifications.generic import GenericWebhookNotifier
-from tinymacro.gui.anim import AnimatedToolButton
+from tinymacro.gui.anim import AnimatedToolButton, InteractionFx
 from tinymacro.gui.editor import EditorDialog
 from tinymacro.gui.framed_window import FramelessWindow
 from tinymacro.gui.icons import get_icon
@@ -51,6 +52,7 @@ from tinymacro.gui.playlist_dialog import PlaylistDialog
 from tinymacro.gui.log_dialog import LogDialog
 from tinymacro.gui.onboarding import OnboardingOverlay, OnboardingStep
 from tinymacro.gui.scheduler_dialog import SchedulerDialog
+from tinymacro.gui.sounds import ui_sounds
 from tinymacro.gui.theme import apply_theme, current_theme, icon_color, theme_manager
 from tinymacro.gui.themed_background import ThemedBackground
 from tinymacro.gui.toast import ToastManager
@@ -174,6 +176,8 @@ class StudioWindow(FramelessWindow):
         self._cleaned = False
         self._keep_backend = False  # set true on a variant switch to share the backend
         self._mask_hole: QRect | None = None
+        # Hover tint + hover/click sounds for the plain side-panel push buttons.
+        self._fx = InteractionFx(self)
         self.toasts = ToastManager(self, animated=settings.animations)
 
         self.recorder = Recorder(
@@ -280,13 +284,18 @@ class StudioWindow(FramelessWindow):
 
         right.addSpacing(6)
         right.addWidget(_heading("Record & Play"))
-        self.record_btn = self._big_button("record", "Record", color, self.toggle_recording)
-        # Play is a combined Play/Stop toggle; Pause/Resume is a separate button.
-        self.play_btn = self._big_button("play", "Play", color, self.toggle_playback)
-        self.pause_btn = self._big_button("pause", "Pause", color, self.toggle_pause)
-        right.addWidget(self.record_btn)
-        right.addWidget(self.play_btn)
-        right.addWidget(self.pause_btn)
+        # All three transport controls share one row as icon-only buttons, each
+        # tinted with its own colour (record orange, play green, stop red…) so
+        # they're identifiable without labels. Play is a combined Play/Stop
+        # toggle; Pause/Resume is a separate button.
+        self.record_btn = self._transport_button("record", "Record", self.toggle_recording)
+        self.play_btn = self._transport_button("play", "Play", self.toggle_playback)
+        self.pause_btn = self._transport_button("pause", "Pause", self.toggle_pause)
+        transport = QHBoxLayout()
+        transport.setSpacing(6)
+        for button in (self.record_btn, self.play_btn, self.pause_btn):
+            transport.addWidget(button, 1)
+        right.addLayout(transport)
 
         right.addSpacing(6)
         right.addWidget(_heading("Settings"))
@@ -341,9 +350,22 @@ class StudioWindow(FramelessWindow):
         button.clicked.connect(slot)
         return button
 
+    def _transport_button(self, name: str, tooltip: str, slot) -> AnimatedToolButton:
+        """A large icon-only transport button glowing in its own accent colour."""
+        accent = self._button_color(name)
+        button = AnimatedToolButton(accent=accent, animated=self.settings.animations)
+        button.setIcon(get_icon(name, accent, 24))
+        button.setIconSize(QSize(24, 24))
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        button.setToolTip(tooltip)
+        button.setMinimumHeight(44)
+        button.clicked.connect(slot)
+        return button
+
     def _row_button(self, icon, text, color, slot) -> QPushButton:
         button = QPushButton(get_icon(icon, color), text)
         button.clicked.connect(slot)
+        self._fx.attach(button, self.colors.accent if self.colors else None)
         return button
 
     # -- aspect lock ----------------------------------------------------------
@@ -732,26 +754,32 @@ class StudioWindow(FramelessWindow):
         if self._themed_bg is not None:
             self._themed_bg.set_paused(playing or not self.settings.animations)  # freeze GIF during playback
         self.dock_btn.setText("Undock Window" if self._target_hwnd is not None else "Dock Window")
-        self.record_btn.setText("  Stop Rec" if recording else "  Record")
-        self.record_btn.setIcon(get_icon("record", self._button_color("record"), 20))
+        # Icon-only transport row: the tooltip carries the label, and each button
+        # glows in its own accent so state reads from colour + glyph alone.
+        self._set_transport(self.record_btn, "record", "Stop Recording" if recording else "Record")
         self.play_btn.setEnabled((bool(self.macro.events) or playing) and not recording)
         # Play is a combined Play/Stop toggle; Pause/Resume is its own button.
         if playing:
-            self.play_btn.setText("  Stop")
-            self.play_btn.setIcon(get_icon("stop", self._button_color("stop"), 20))
+            self._set_transport(self.play_btn, "stop", "Stop")
         else:
-            self.play_btn.setText("  Play")
-            self.play_btn.setIcon(get_icon("play", self._button_color("play"), 20))
+            self._set_transport(self.play_btn, "play", "Play")
         paused = self.player.state.paused
         self.pause_btn.setEnabled(playing)
-        self.pause_btn.setText("  Resume" if paused else "  Pause")
-        self.pause_btn.setIcon(get_icon("play" if paused else "pause", self._button_color("pause"), 20))
+        self._set_transport(
+            self.pause_btn, "play" if paused else "pause", "Resume" if paused else "Pause",
+            accent_name="pause",
+        )
+
+    def _set_transport(self, button, icon: str, tooltip: str, accent_name: str | None = None) -> None:
+        """Point a transport button at an icon/tooltip, re-tinting its accent."""
+        accent = self._button_color(accent_name or icon)
+        button.setIcon(get_icon(icon, accent, 24))
+        button.setToolTip(tooltip)
+        button.set_accent(accent)
 
     def _button_color(self, name: str) -> str:
-        theme = current_theme()
-        if theme is not None and name in theme.button_colors:
-            return theme.button_colors[name]
-        return icon_color()
+        """A button's icon colour: theme override → transport default → icon tint."""
+        return resolve_button_color(current_theme(), name, icon_color())
 
     def _update_overview(self) -> None:
         target = self._target_title or "— none —"
@@ -844,6 +872,7 @@ class StudioWindow(FramelessWindow):
         self.colors = apply_theme(QApplication.instance(), self.settings)
         self.player.allow_code_execution = self.settings.allow_code_execution
         self.player.loop_gap_ns = self.settings.effective_loop_gap_ns
+        ui_sounds().set_enabled(self.settings.ui_sounds)
         self.recorder.skip_final_click = self.settings.skip_final_click
         self.recorder.hotkeys = self.settings.hotkeys
         self.recorder.move_min_interval_ns = self.settings.move_min_interval_ms * 1_000_000
