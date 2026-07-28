@@ -29,6 +29,15 @@ for _pkg in ("cv2", "mss"):
     binaries += _b
     hiddenimports += _h
 
+# Bundle the optional (build-only, gitignored) encryption module and its crypto
+# backend — only when present, so a fresh clone without it still builds.
+if (project_root / "src" / "tinymacro" / "core" / "securepack.py").exists():
+    hiddenimports.append("tinymacro.core.securepack")
+    _d, _b, _h = collect_all("cryptography")
+    datas += _d
+    binaries += _b
+    hiddenimports += _h
+
 a = Analysis(
     [str(project_root / "src" / "tinymacro" / "cli.py")],
     pathex=[str(project_root)],
