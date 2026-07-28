@@ -281,11 +281,10 @@ class StudioWindow(FramelessWindow):
         right.addSpacing(6)
         right.addWidget(_heading("Record & Play"))
         self.record_btn = self._big_button("record", "Record", color, self.toggle_recording)
+        # One dynamic transport button: Play / Stop / Resume depending on state.
         self.play_btn = self._big_button("play", "Play", color, self.toggle_playback)
-        self.stop_btn = self._big_button("stop", "Stop", color, self.stop_all)
         right.addWidget(self.record_btn)
         right.addWidget(self.play_btn)
-        right.addWidget(self.stop_btn)
 
         right.addSpacing(6)
         right.addWidget(_heading("Settings"))
@@ -718,11 +717,25 @@ class StudioWindow(FramelessWindow):
             self._themed_bg.set_paused(playing or not self.settings.animations)  # freeze GIF during playback
         self.dock_btn.setText("Undock Window" if self._target_hwnd is not None else "Dock Window")
         self.record_btn.setText("  Stop Rec" if recording else "  Record")
-        self.play_btn.setEnabled(bool(self.macro.events) and not recording)
+        self.record_btn.setIcon(get_icon("record", self._button_color("record"), 20))
+        self.play_btn.setEnabled((bool(self.macro.events) or playing) and not recording)
+        # One dynamic transport button: Stop while playing (Resume when paused at a
+        # breakpoint), Play otherwise — with themeable per-button colours.
         if playing and self.player.state.paused:
-            self.play_btn.setText("  Resume")  # paused at a breakpoint
+            self.play_btn.setText("  Resume")
+            self.play_btn.setIcon(get_icon("play", self._button_color("play"), 20))
+        elif playing:
+            self.play_btn.setText("  Stop")
+            self.play_btn.setIcon(get_icon("stop", self._button_color("stop"), 20))
         else:
-            self.play_btn.setText("  Stop" if playing else "  Play")
+            self.play_btn.setText("  Play")
+            self.play_btn.setIcon(get_icon("play", self._button_color("play"), 20))
+
+    def _button_color(self, name: str) -> str:
+        theme = current_theme()
+        if theme is not None and name in theme.button_colors:
+            return theme.button_colors[name]
+        return icon_color()
 
     def _update_overview(self) -> None:
         target = self._target_title or "— none —"

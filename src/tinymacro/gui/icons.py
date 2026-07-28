@@ -80,6 +80,11 @@ _ICONS: dict[str, str] = {
                    'fill="{color}" opacity="0.5"/>',
     "pin": '<path d="M14.5 3.2 20.8 9.5l-2.2 2.2-1-.4-3.3 3.3.5 2.4-1.6 1.6-3.4-3.4-3.6 3.6'
            '-1.1-1.1 3.6-3.6-3.4-3.4 1.6-1.6 2.4.5 3.3-3.3-.4-1z" fill="{color}"/>',
+    "pin_filled": '<path d="M14.5 3.2 20.8 9.5l-2.2 2.2-1-.4-3.3 3.3.5 2.4-1.6 1.6-3.4-3.4-3.6 3.6'
+                  '-1.1-1.1 3.6-3.6-3.4-3.4 1.6-1.6 2.4.5 3.3-3.3-.4-1z" fill="{color}"/>',
+    "pin_outline": '<path d="M14.5 3.2 20.8 9.5l-2.2 2.2-1-.4-3.3 3.3.5 2.4-1.6 1.6-3.4-3.4-3.6 3.6'
+                   '-1.1-1.1 3.6-3.6-3.4-3.4 1.6-1.6 2.4.5 3.3-3.3-.4-1z" fill="none" '
+                   'stroke="{color}" stroke-width="1.5" stroke-linejoin="round"/>',
     "scheduler": '<circle cx="12" cy="13" r="8" fill="{color}" opacity="0.16"/>'
                  '<circle cx="12" cy="13" r="8" fill="none" stroke="{color}" stroke-width="1.6"/>'
                  '<path d="M12 8.5V13l3 2" stroke="{color}" stroke-width="1.7" '

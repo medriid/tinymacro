@@ -92,12 +92,18 @@ class _Dots(QWidget):
 
 
 class OnboardingOverlay(QWidget):
-    """Full-window blurred-spotlight tour over ``host``."""
+    """A screen-filling blurred-spotlight tour over ``host``.
+
+    Rendered as its own top-level window covering the whole screen the host is on,
+    so the tour is fully visible even when the app window is small and tucked in a
+    corner. The host window is drawn (blurred, then crisp inside the spotlight) at
+    its real on-screen position; everything else is a dark scrim.
+    """
 
     finished = pyqtSignal()
 
     def __init__(self, host: QWidget, steps: list[OnboardingStep], animated: bool = True) -> None:
-        super().__init__(host)
+        super().__init__(None)  # top-level, so it can span the whole screen
         self._host = host
         self._steps = steps
         self._index = 0
@@ -105,10 +111,15 @@ class OnboardingOverlay(QWidget):
         self._done = False
         self._blurred: QPixmap | None = None
         self._sharp: QPixmap | None = None
+        self._host_rect = QRect()  # host window within this overlay (screen-local)
         self._spot_rect = QRect()
         self._pulse = 0.0
 
-        self.setGeometry(host.rect())
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+        )
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
@@ -197,16 +208,24 @@ class OnboardingOverlay(QWidget):
         self._card_fx.setOpacity(1.0)
 
     # -- lifecycle ------------------------------------------------------------
+    def _fit_to_screen(self) -> None:
+        """Cover the whole screen the host is on and locate the host within it."""
+        screen = self._host.screen() or self._host.window().screen()
+        geo = screen.geometry()
+        self.setGeometry(geo)
+        top_left = self._host.mapToGlobal(QPoint(0, 0)) - geo.topLeft()
+        self._host_rect = QRect(top_left, self._host.size())
+
     def start(self) -> None:
-        """Snapshot the host, show the overlay, and present the first step."""
-        self.setGeometry(self._host.rect())
+        """Snapshot the host, show the full-screen overlay, present the first step."""
+        self._fit_to_screen()
         self._capture()
-        # Track the window: as a child the overlay already moves with it; on a
-        # resize we re-snapshot and re-fit so the tour stays glued to the window
-        # wherever it is and whatever size it takes.
+        # Track the window: re-snapshot and re-fit if the host moves or resizes so
+        # the tour stays glued to it wherever it is.
         self._host.installEventFilter(self)
         self.show()
         self.raise_()
+        self.activateWindow()
         self.setFocus()
         if self._animated:
             fx = QGraphicsOpacityEffect(self)
@@ -270,7 +289,8 @@ class OnboardingOverlay(QWidget):
         widget = step.target() if step.target else None
         if widget is None or not widget.isVisible():
             return QRect()
-        top_left = widget.mapTo(self._host, QPoint(0, 0))
+        # Map the control's global position into this screen-filling overlay.
+        top_left = widget.mapToGlobal(QPoint(0, 0)) - self.geometry().topLeft()
         rect = QRect(top_left, widget.size())
         return rect.adjusted(-_SPOT_PAD, -_SPOT_PAD, _SPOT_PAD, _SPOT_PAD)
 
@@ -299,8 +319,10 @@ class OnboardingOverlay(QWidget):
         self._finish()
 
     def eventFilter(self, obj, event):  # noqa: N802
-        if obj is self._host and event.type() == QEvent.Type.Resize and not self._done:
-            self.setGeometry(self._host.rect())
+        if obj is self._host and not self._done and event.type() in (
+            QEvent.Type.Resize, QEvent.Type.Move
+        ):
+            self._fit_to_screen()
             self._capture()
             self._show_step(self._index, animate=False)
         return super().eventFilter(obj, event)
@@ -387,8 +409,10 @@ class OnboardingOverlay(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = self.rect()
 
+        # Dark fills the whole screen; the app window is drawn (blurred) in place.
+        painter.fillRect(rect, QColor(6, 7, 10))
         if self._blurred is not None:
-            painter.drawPixmap(rect, self._blurred)
+            painter.drawPixmap(self._host_rect, self._blurred)
         painter.fillRect(rect, QColor(8, 10, 14, _DIM_ALPHA))
 
         spot = self._spot_rect
@@ -397,7 +421,7 @@ class OnboardingOverlay(QWidget):
             path.addRoundedRect(QRectF(spot), _SPOT_RADIUS, _SPOT_RADIUS)
             painter.save()
             painter.setClipPath(path)
-            painter.drawPixmap(rect, self._sharp)  # crisp feature inside the spotlight
+            painter.drawPixmap(self._host_rect, self._sharp)  # crisp control inside the spotlight
             painter.restore()
 
             # Crisp white pixel reticle: a hard square frame plus corner brackets

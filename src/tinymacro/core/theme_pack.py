@@ -144,6 +144,9 @@ class Theme:
     accent: str = "#ffffff"
     accent_text: str = "#151515"
     kind_colors: dict[str, str] = field(default_factory=lambda: dict(_DEFAULT_KIND_COLORS))
+    # Optional per-button icon colours (e.g. {"record": "#e0554e", "play": "#2f9e6f"}).
+    # Keys are button ids; missing buttons fall back to the theme text colour.
+    button_colors: dict[str, str] = field(default_factory=dict)
     font_family: str = ""
     # name -> base64 PNG/JPG/GIF bytes (may include a "thumbnail" preview).
     assets: dict[str, str] = field(default_factory=dict)
@@ -178,6 +181,9 @@ class Theme:
         for k, v in self.kind_colors.items():
             if not _is_hex(v):
                 raise ThemeError(f"kind colour {k!r} is not a valid hex colour: {v!r}")
+        for k, v in self.button_colors.items():
+            if not _is_hex(v):
+                raise ThemeError(f"button colour {k!r} is not a valid hex colour: {v!r}")
         if not (0.0 <= self.panel_opacity <= 1.0):
             raise ThemeError("panel_opacity must be between 0 and 1")
 
@@ -242,6 +248,7 @@ class Theme:
             "accent": self.accent,
             "accent_text": self.accent_text,
             "kind_colors": dict(self.kind_colors),
+            "button_colors": dict(self.button_colors),
             "font_family": self.font_family,
             "assets": dict(self.assets),
         }
@@ -269,6 +276,7 @@ class Theme:
             accent=str(data.get("accent", "#ffffff")),
             accent_text=str(data.get("accent_text", "#151515")),
             kind_colors={**_DEFAULT_KIND_COLORS, **{str(k): str(v) for k, v in kinds.items()}},
+            button_colors={str(k): str(v) for k, v in data.get("button_colors", {}).items()},
             font_family=str(data.get("font_family", "")),
             assets={str(k): str(v) for k, v in data.get("assets", {}).items()},
         )

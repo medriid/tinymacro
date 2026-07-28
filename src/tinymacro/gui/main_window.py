@@ -234,13 +234,28 @@ class MainWindow(FramelessWindow):
             self._themed_bg = ThemedBackground(self, theme)
             self._themed_bg.set_paused(self.player.state.playing or not self.settings.animations)
 
+    def _update_pin_button(self) -> None:
+        """White pin: filled when pinned (always-on-top), outline when not."""
+        pinned = self.top_action.isChecked()
+        self.top_action.setIcon(get_icon("pin_filled" if pinned else "pin_outline", "#ffffff"))
+        self.top_action.setToolTip("Always on top: on" if pinned else "Always on top: off")
+
+    def _button_color(self, name: str) -> str:
+        """A button's icon colour: the theme's per-button override, or the default."""
+        theme = current_theme()
+        if theme is not None and name in theme.button_colors:
+            return theme.button_colors[name]
+        return self._icon_color()
+
     def _on_theme_changed(self, colors) -> None:
         self.colors = colors
         color = self._icon_color()
         for action, icon_name in self._icon_actions.items():
-            action.setIcon(get_icon(icon_name, color))
+            action.setIcon(get_icon(icon_name, self._button_color(icon_name)))
         expanded = not self.settings.compact_mode
         self.expand_button.setIcon(get_icon("chevron_up" if expanded else "chevron_down", color))
+        self._update_pin_button()  # keep the pin white through theme changes
+        self._update_state()  # re-tint the dynamic play/stop button
 
     # -- construction ---------------------------------------------------------
     def _build_central(self) -> None:
@@ -285,9 +300,9 @@ class MainWindow(FramelessWindow):
         self.open_action = self._action("open", "Open")
         self.save_action = self._action("save", "Save")
         self.record_action = self._action("record", "Record", checkable=True)
+        # One dynamic transport button: Play when idle, Stop while playing.
         self.play_action = self._action("play", "Play")
         self.pause_action = self._action("pause", "Pause/Resume")
-        self.stop_action = self._action("stop", "Stop")
         self.step_action = self._action("step", "Step one event")
         self.editor_action = self._action("editor", "Editor")
         self.library_action = self._action("library", "Library")
@@ -296,7 +311,7 @@ class MainWindow(FramelessWindow):
         self.top_action.setChecked(self.settings.always_on_top)
 
         for action in (self.open_action, self.save_action, self.record_action,
-                       self.play_action, self.pause_action, self.stop_action, self.step_action):
+                       self.play_action, self.pause_action, self.step_action):
             toolbar.addAction(action)
         toolbar.addSeparator()
 
@@ -323,12 +338,22 @@ class MainWindow(FramelessWindow):
         self.record_action.triggered.connect(self.toggle_recording)
         self.play_action.triggered.connect(self.toggle_playback)
         self.pause_action.triggered.connect(self.toggle_pause)
-        self.stop_action.triggered.connect(self.stop_all)
         self.step_action.triggered.connect(self.step_once)
         self.editor_action.triggered.connect(self.open_editor)
         self.library_action.triggered.connect(self.open_library)
         self.pref_action.triggered.connect(self.open_preferences)
         self.top_action.triggered.connect(self.toggle_always_on_top)
+        # The pin (always-on-top) button is managed manually: always a black
+        # button with a white pin that fills when pinned, outlines when not.
+        self._icon_actions.pop(self.top_action, None)
+        self.top_action.toggled.connect(lambda _c: self._update_pin_button())
+        self.top_button = toolbar.widgetForAction(self.top_action)
+        if self.top_button is not None:
+            self.top_button.setStyleSheet(
+                "QToolButton { background: #000; border: 1px solid #000; }"
+                "QToolButton:hover { border-color: #ffffff; }"
+            )
+        self._update_pin_button()
 
     def _build_menu(self) -> None:
         file_menu = self.menu_bar().addMenu("File")
@@ -1201,7 +1226,10 @@ class MainWindow(FramelessWindow):
             self._themed_bg.set_paused(playing or not self.settings.animations)
         self.record_action.setChecked(recording)
         self.indicator.set_active(recording)
-        self.play_action.setEnabled(bool(self.macro.events) and not recording)
+        # One dynamic transport button: Stop while playing, Play otherwise.
+        self.play_action.setIcon(get_icon("stop" if playing else "play", self._button_color("stop" if playing else "play")))
+        self.play_action.setToolTip("Stop" if playing else "Play")
+        self.play_action.setEnabled((bool(self.macro.events) or playing) and not recording)
         self.pause_action.setEnabled(playing)
         self.step_action.setEnabled(bool(self.macro.events) and not playing and not recording)
         self.editor_action.setEnabled(bool(self.macro.events))

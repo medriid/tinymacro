@@ -15,7 +15,6 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QColorDialog,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -40,6 +39,7 @@ from tinymacro.core.theme_pack import (
     ThemeError,
     default_themes_dir,
 )
+from tinymacro.gui.color_picker import ColorPickerDialog
 from tinymacro.gui.theme import apply_theme, apply_theme_object, current_theme
 
 _KINDS = ("solid", "image", "animated")
@@ -85,9 +85,9 @@ class _Swatch(QPushButton):
         self.setStyleSheet(f"background: {self._color}; border: 1px solid palette(mid); border-radius: 4px;")
 
     def _pick(self) -> None:
-        chosen = QColorDialog.getColor(QColor(self._color), self, "Pick a colour")
-        if chosen.isValid():
-            self.set_color(chosen.name())
+        chosen = ColorPickerDialog.get_color(self._color, self)
+        if chosen:
+            self.set_color(chosen)
             self._on_change()
 
 
@@ -142,6 +142,16 @@ class ThemeEditor(QDialog):
             self.font_combo.setCurrentFont(self.font_combo.currentFont().__class__(base.font_family))
         self.font_combo.currentFontChanged.connect(self._preview)
 
+        # Per-button icon colours (Record / Play / Stop / Pause).
+        bc = base.button_colors if base else {}
+        self.button_colors_on = QCheckBox("Custom button colours")
+        self.button_colors_on.setChecked(bool(bc))
+        self.button_colors_on.toggled.connect(self._preview)
+        self.btn_record = _Swatch(bc.get("record", "#e0554e"), self._preview)
+        self.btn_play = _Swatch(bc.get("play", "#2f9e6f"), self._preview)
+        self.btn_stop = _Swatch(bc.get("stop", "#e0913a"), self._preview)
+        self.btn_pause = _Swatch(bc.get("pause", "#4f9dde"), self._preview)
+
         if base and base.background.kind != "solid":
             data = base.background_bytes()
             if data:
@@ -163,6 +173,11 @@ class ThemeEditor(QDialog):
         form.addRow("Panel", self.panel)
         form.addRow("", self.font_on)
         form.addRow("Font", self.font_combo)
+        form.addRow("", self.button_colors_on)
+        form.addRow("Buttons", self._row(
+            QLabel("Rec"), self.btn_record, QLabel("Play"), self.btn_play,
+            QLabel("Stop"), self.btn_stop, QLabel("Pause"), self.btn_pause,
+        ))
         body = QWidget()
         body.setLayout(form)
 
@@ -260,6 +275,13 @@ class ThemeEditor(QDialog):
         theme.muted = _mix(self.text.color(), self.panel.color(), 0.45)
         theme.panel_opacity = self.opacity.value() / 100
         theme.font_family = self.font_combo.currentFont().family() if self.font_on.isChecked() else ""
+        if self.button_colors_on.isChecked():
+            theme.button_colors = {
+                "record": self.btn_record.color(),
+                "play": self.btn_play.color(),
+                "stop": self.btn_stop.color(),
+                "pause": self.btn_pause.color(),
+            }
         try:
             theme.validate()
         except ThemeError as exc:
@@ -340,6 +362,13 @@ class ThemeEditor(QDialog):
         self.text.set_color(theme.text)
         self.panel.set_color(theme.panel)
         self.font_on.setChecked(bool(theme.font_family))
+        bc = theme.button_colors
+        self.button_colors_on.setChecked(bool(bc))
+        if bc:
+            self.btn_record.set_color(bc.get("record", self.btn_record.color()))
+            self.btn_play.set_color(bc.get("play", self.btn_play.color()))
+            self.btn_stop.set_color(bc.get("stop", self.btn_stop.color()))
+            self.btn_pause.set_color(bc.get("pause", self.btn_pause.color()))
         data = theme.background_bytes()
         if data:
             self._asset_bytes = data

@@ -5,7 +5,7 @@ to build next, what to improve, and how to develop/build/release.
 
 ---
 
-## Current state (shipped in v0.1.3)
+## Current state (shipped in v0.1.3.1)
 
 - **Two UI variants** (both frameless, custom title bar/icons, animations):
   - **Classic** — compact toolbar UI, absolute-coordinate macros (`.tmacc`).
@@ -48,6 +48,15 @@ to build next, what to improve, and how to develop/build/release.
   **Preferences → Show Introduction** in both UIs.
 - **Studio dock aperture**: aspect lock (Free / 16:9 / Match-window) that
   letterboxes the aperture; the choice persists.
+- **Themed colour picker** (`gui/color_picker.py`): a custom SV-field + hue-bar +
+  hex/RGB + preset/recent picker that inherits the app theme, used everywhere
+  (theme editor, accent) in place of the native dialog.
+- **UI polish**: onboarding now fills the whole screen (the app window is drawn
+  blurred in place, so the tour is fully visible even when the window is small);
+  play and stop are one dynamic transport button in both UIs; per-button icon
+  colours are themeable; the always-on-top pin is a black button whose pin fills
+  when pinned; Studio keeps its taskbar icon; the redundant Classic title label is
+  gone.
 - **Recording fidelity**: only the *full* global-hotkey chord is swallowed, so
   plain letters used in a chord (c/r/s/p/m) and lone modifiers (Ctrl for
   Ctrl+C in the target app) record correctly.

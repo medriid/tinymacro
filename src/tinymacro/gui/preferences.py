@@ -93,6 +93,13 @@ class PreferencesDialog(QDialog):
         self.open_theme_editor.emit()
         self.reject()
 
+    def _pick_accent(self) -> None:
+        from tinymacro.gui.color_picker import ColorPickerDialog
+
+        chosen = ColorPickerDialog.get_color(self.accent_color.text().strip() or "#3b82f6", self)
+        if chosen:
+            self.accent_color.setText(chosen)
+
     @staticmethod
     def _row(*widgets) -> QWidget:
         w = QWidget()
@@ -113,6 +120,8 @@ class PreferencesDialog(QDialog):
         self.theme_preset.setCurrentText(s.theme_preset)
         self.accent_color = QLineEdit(s.accent_color)
         self.accent_color.setPlaceholderText("#3b82f6 (blank = monochrome)")
+        self.accent_pick = QPushButton("Pick…")
+        self.accent_pick.clicked.connect(self._pick_accent)
         self.compact_mode = QCheckBox()
         self.compact_mode.setChecked(s.compact_mode)
         self.animations = QCheckBox()
@@ -137,7 +146,7 @@ class PreferencesDialog(QDialog):
         form = QFormLayout()
         form.addRow("Theme", self.theme)
         form.addRow("Color preset", self.theme_preset)
-        form.addRow("Custom accent", self.accent_color)
+        form.addRow("Custom accent", self._row(self.accent_color, self.accent_pick))
         form.addRow("UI scale", self.ui_scale)
         form.addRow("Density", self.density)
         form.addRow("Custom themes", self._row(self.theme_editor_btn, self._active_theme_label))

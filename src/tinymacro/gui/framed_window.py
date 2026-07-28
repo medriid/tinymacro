@@ -60,6 +60,10 @@ class TitleBar(QWidget):
         self.title_label = QLabel(title)
         self.title_label.setObjectName("titleLabel")
         self.title_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        # With a menu bar (Classic) the window title next to it is redundant, so
+        # hide it — the menu already identifies the app and the taskbar keeps the
+        # real window title.
+        self._show_title = not with_menu
 
         self.btn_min = self._chrome_button("win_min", color, animated, window.showMinimized)
         self.btn_min.setToolTip("Minimize")
@@ -75,7 +79,11 @@ class TitleBar(QWidget):
         layout.addWidget(icon_label)
         if self.menu_bar is not None:
             layout.addWidget(self.menu_bar)
-        layout.addWidget(self.title_label, 1)
+        if self._show_title:
+            layout.addWidget(self.title_label, 1)
+        else:
+            self.title_label.hide()
+            layout.addStretch(1)  # keep the window controls right-aligned
         layout.addWidget(self.btn_min)
         layout.addWidget(self.btn_max)
         layout.addWidget(self.btn_close)
@@ -126,6 +134,9 @@ class FramelessWindow(QMainWindow):
         self._closing = False
         self._opened = False
         self.setWindowTitle(title)
+        # Set the icon on the window itself so a frameless window keeps its
+        # taskbar icon (Studio was losing it, relying on the app icon alone).
+        self.setWindowIcon(app_icon())
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         self.setMouseTracking(True)
         self.title_bar = TitleBar(self, title, with_menu, animated)

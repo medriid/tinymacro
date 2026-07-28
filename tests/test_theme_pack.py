@@ -87,6 +87,20 @@ def test_non_image_asset_is_rejected():
         theme.validate()
 
 
+def test_button_colors_round_trip():
+    theme = Theme(button_colors={"record": "#e0554e", "play": "#2f9e6f"})
+    assert isinstance(theme.validate(), list)
+    restored = Theme.from_dict(theme.to_dict())
+    assert restored.button_colors["record"] == "#e0554e"
+    assert restored.button_colors["play"] == "#2f9e6f"
+
+
+def test_invalid_button_color_rejected():
+    theme = Theme(button_colors={"play": "nope"})
+    with pytest.raises(ThemeError):
+        theme.validate()
+
+
 def test_low_contrast_warns():
     theme = Theme(text="#101010", background=Background(kind="solid", color="#000000"))
     assert any("contrast" in w for w in theme.validate())
