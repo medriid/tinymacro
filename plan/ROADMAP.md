@@ -5,7 +5,7 @@ to build next, what to improve, and how to develop/build/release.
 
 ---
 
-## Current state (shipped in v0.1.3.1)
+## Current state (shipped in v0.1.3.2)
 
 - **Two UI variants** (both frameless, custom title bar/icons, animations):
   - **Classic** — compact toolbar UI, absolute-coordinate macros (`.tmacc`).
@@ -51,12 +51,13 @@ to build next, what to improve, and how to develop/build/release.
 - **Themed colour picker** (`gui/color_picker.py`): a custom SV-field + hue-bar +
   hex/RGB + preset/recent picker that inherits the app theme, used everywhere
   (theme editor, accent) in place of the native dialog.
-- **UI polish**: onboarding now fills the whole screen (the app window is drawn
-  blurred in place, so the tour is fully visible even when the window is small);
-  play and stop are one dynamic transport button in both UIs; per-button icon
-  colours are themeable; the always-on-top pin is a black button whose pin fills
-  when pinned; Studio keeps its taskbar icon; the redundant Classic title label is
-  gone.
+- **UI polish**: onboarding fills the whole screen (app window drawn blurred in
+  place) and adopts the app theme (rounded card, UI font, accent ring); transport
+  is Record / Play (Play·Stop toggle) / Pause in both UIs; per-button icon colours
+  are themeable; the always-on-top pin keeps the normal button look with a
+  fill-when-pinned icon; Studio keeps its taskbar icon; the redundant Classic
+  title label is gone. **Docs**: Preferences → Docs opens a categorised in-app
+  help window (`gui/docs_dialog.py`; sections scaffolded, content TBD).
 - **Recording fidelity**: only the *full* global-hotkey chord is swallowed, so
   plain letters used in a chord (c/r/s/p/m) and lone modifiers (Ctrl for
   Ctrl+C in the target app) record correctly.
@@ -127,6 +128,110 @@ to build next, what to improve, and how to develop/build/release.
 - Window docking + enumeration is **Windows-only**.
 - Kernel-level anti-cheat games can block all synthetic input (by design; not a bug).
 - Elevated target apps require running Tiny Macro **as administrator**.
+
+---
+
+## Backlog: features & improvements
+
+A living wishlist, grouped by area. Rough size/impact tags: (S)mall, (M)edium,
+(L)arge; ★ = high user value.
+
+### Recording & playback engine
+- ★ **Text-type step (M)** — type a whole string at a configurable WPM instead of
+  raw key events; unicode-safe (uses scan codes / `SendInput` unicode). Editable
+  as text, not 40 key events.
+- ★ **Window-relative recording for Classic (M)** — optionally anchor coordinates
+  to the *active/target window* (not just the Studio dock), so classic macros
+  survive the target window moving. Reuse the `dock.py` relative-coords engine.
+- **Macro variables / parameters (L)** — named values prompted at run time (or
+  passed via CLI/URL), referenced in text-type, `run`, wait, and image steps.
+  Enables templated, reusable macros.
+- **Sub-macros / "call macro" step (M)** — invoke another `.tmacc/.tmacd` as a
+  step; compose large flows from small pieces (builds on `Macro.chain`).
+- **Clipboard steps (S)** — set/get the clipboard as a step (paste dynamic text,
+  capture a value into a variable).
+- **Humanized mouse paths (M)** — optional Bézier/‑jitter interpolation between
+  click points on playback for natural motion (QA realism, not evasion).
+- **Per-step / ramped speed (M)** — a speed multiplier per step or a ramp over the
+  macro, beyond the single global speed.
+- **Manual pause/step hotkeys during playback (S)** — global keys to pause, resume
+  and single-step a running macro (pairs with breakpoints).
+- **Conditional loops UI (M)** — surface "repeat while image/pixel/window" in the
+  editor (interpreter already supports blocks).
+- **Mouse-move thinning presets (S)** — one-click "smooth / balanced / tiny file"
+  capture profiles over the existing `move_min_interval_ms`.
+
+### Editor & debugging
+- ★ **Find & replace across events (M)** — remap a key/button everywhere, shift all
+  timings, bulk-edit a selection.
+- **Run-to-cursor / step-over (M)** — richer debugging on top of breakpoints.
+- **Drag-to-retime on the timeline (M)** — move an event in time by dragging its
+  mark; snap to neighbours.
+- **Record-append (M)** — resume recording *into* an existing macro at a chosen
+  point instead of only replacing.
+- **Command palette (S)** — fuzzy action launcher (Ctrl-K) for editor + app.
+- **Macro diff (M)** — compare two macros (added/removed/retimed steps).
+
+### Vision & automation
+- ★ **OCR step (L)** — wait for / read on-screen text (Tesseract, optional extra);
+  feed a variable or gate a branch.
+- **Multi-image match (S)** — "any of these N images" for one step.
+- **Region capture reuse + preview (S)** — live confidence preview when tuning a
+  click-image step; cache the search region.
+- **Colour-condition builder (S)** — pick a pixel and tolerance visually for
+  wait-pixel / `if colour`.
+
+### Themes & UI
+- **Theme gallery / workshop (L)** — browse, preview and one-click install themes
+  (phase 5 of the theming plan; ties into the website).
+- **Auto light/dark (S)** — follow the OS, or switch by time of day.
+- **Mini-player mode (M)** — a tiny always-on-top floating transport (record/play/
+  stop) for when the main window is in the way.
+- **Tray quick-launch (S)** — run favourite macros straight from the tray menu.
+- **In-app docs content (M)** — fill the `DocsDialog` categories with real
+  write-ups + screenshots (scaffold already shipped).
+- **Localization / i18n (L)** — externalise strings; community translations.
+- **Accessibility pass (M)** — high-contrast preset, focus order, screen-reader
+  labels, full keyboard operability audit.
+- **Optional sound cues (S)** — subtle audio on record start/stop, loop complete.
+
+### Integrations & extensibility
+- ★ **Local HTTP trigger API (M)** — a tiny opt-in local server to start/stop
+  macros from other tools (Stream Deck, scripts, hotkey apps).
+- **Plugin system for step types (L)** — register custom steps (Python entry
+  points) so the community can extend the engine.
+- **Incoming webhook triggers (M)** — fire a macro when an endpoint is hit (mirror
+  of the outgoing notifications).
+- **CLI expansion (S)** — `tinymacro run/list/validate/convert` headless; good for
+  automation and CI of macros.
+
+### Platform & distribution
+- ★ **Installer + auto-updater (L)** — see the Distribution section below (item 0).
+- **macOS backend (L)** — capture/replay via Quartz `CGEvent`; docking via
+  Accessibility APIs. Rounds out the cross-platform story.
+- **Portable mode (S)** — keep settings/library/themes next to the executable.
+- **Settings + library + theme cloud sync (L)** — part of the accounts/workshop
+  plan; pull on connect.
+- **Binary slimming (M)** — trim unused Qt plugins / opencv modules to cut the
+  ~90–130 MB size and speed up startup.
+
+### Reliability, safety & performance
+- **Opt-in crash reporting (M)** — capture tracebacks (with consent) to fix issues
+  faster.
+- **Per-macro permissions (M)** — a macro declares which capabilities it needs
+  (input, `run`, network); prompt on first play, especially for shared macros.
+- **Signed / integrity-checked shared macros (M)** — detect tampering for
+  workshop downloads; never auto-enable code execution.
+- **Runaway safeguards (S)** — global kill-switch overlay, max-events / max-runtime
+  guards, and an always-visible "playback is running" indicator.
+- **Faster cold start (S)** — defer heavy imports; measure and trim startup.
+
+### Content & onboarding
+- **Bundled sample macros (S)** — ship a few example `.tmacc/.tmacd` so first-run
+  users have something to play with (the remaining piece of the onboarding item).
+- **Macro snippet library (M)** — built-in reusable blocks (login, common waits).
+- **Run history & stats (S)** — per-macro run count, last run, average duration
+  (extend `MacroLibrary`).
 
 ---
 

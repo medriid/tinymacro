@@ -74,6 +74,9 @@ class PreferencesDialog(QDialog):
         self.show_intro_btn = QPushButton("Show Introduction")
         self.show_intro_btn.setToolTip("Replay the guided tour of Tiny Macro.")
         self.show_intro_btn.clicked.connect(self._request_tour)
+        self.docs_btn = QPushButton("Docs")
+        self.docs_btn.setToolTip("Open the in-app documentation.")
+        self.docs_btn.clicked.connect(self._open_docs)
 
         form = QFormLayout()
         form.addRow("Backend", self.backend)
@@ -81,8 +84,13 @@ class PreferencesDialog(QDialog):
         form.addRow("Default loops (0 = infinite)", self.loop_count)
         form.addRow("Default speed", self.speed)
         form.addRow("Show system tray icon", self.tray_enabled)
-        form.addRow("Introduction", self.show_intro_btn)
+        form.addRow("Help", self._row(self.show_intro_btn, self.docs_btn))
         return _wrap(form)
+
+    def _open_docs(self) -> None:
+        from tinymacro.gui.docs_dialog import DocsDialog
+
+        DocsDialog(self).exec()
 
     def _request_tour(self) -> None:
         # Close Preferences, then let the host start the tour over the main window.

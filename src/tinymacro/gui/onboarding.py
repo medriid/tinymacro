@@ -56,22 +56,28 @@ class OnboardingStep:
     target: Callable[[], QWidget | None] | None = None
 
 
-# A crisp white, pixel-terminal aesthetic: hard edges, square marks, mono type.
-_ACCENT = QColor("#ffffff")
-_MONO = '"Cascadia Mono", "Consolas", "Menlo", "DejaVu Sans Mono", "Courier New", monospace'
+# Onboarding adopts the app's look: rounded surfaces, the UI font, theme colours.
 _SPOT_PAD = 8       # padding around the highlighted widget
-_SPOT_RADIUS = 2    # nearly-square corners for a pixel feel
+_SPOT_RADIUS = 8    # rounded corners to match the app's controls
 _BLUR_RADIUS = 16
-_DIM_ALPHA = 175
+_DIM_ALPHA = 170
+
+
+def _colors():
+    from tinymacro.gui.theme import current_colors
+
+    return current_colors()
 
 
 class _Dots(QWidget):
-    """A row of square progress pips; the current step is the solid white one."""
+    """A row of rounded progress dots; the current step uses the accent colour."""
 
-    def __init__(self, count: int, parent=None) -> None:
+    def __init__(self, count: int, accent: str, muted: str, parent=None) -> None:
         super().__init__(parent)
         self._count = max(1, count)
         self._current = 0
+        self._accent = QColor(accent)
+        self._muted = QColor(muted)
         self.setFixedHeight(12)
         self.setMinimumWidth(self._count * 14)
 
@@ -80,15 +86,16 @@ class _Dots(QWidget):
         self.update()
 
     def paintEvent(self, _event) -> None:  # noqa: N802
-        painter = QPainter(self)  # no antialiasing → crisp pixel squares
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
         cy = self.height() // 2
         for i in range(self._count):
             active = i == self._current
-            painter.setBrush(QColor(255, 255, 255, 255 if active else 60))
-            s = 8 if active else 6
-            x = 3 + i * 14 + (8 - s) // 2
-            painter.drawRect(x, cy - s // 2, s, s)
+            painter.setBrush(self._accent if active else self._muted)
+            r = 4 if active else 3
+            cx = 5 + i * 14
+            painter.drawEllipse(QPoint(cx, cy), r, r)
 
 
 class OnboardingOverlay(QWidget):
@@ -114,6 +121,15 @@ class OnboardingOverlay(QWidget):
         self._host_rect = QRect()  # host window within this overlay (screen-local)
         self._spot_rect = QRect()
         self._pulse = 0.0
+        # Adopt the active theme's colours so the tour feels part of the app.
+        c = _colors()
+        dark = c.dark if c else True
+        self._panel = (c.elevated if c else ("#232326" if dark else "#ffffff"))
+        self._border = (c.border if c else "#3a3a3a")
+        self._text = (c.text if c else "#f0f0f0")
+        self._muted = (c.muted if c else "#a0a0a0")
+        self._accent = (c.accent if c else "#ffffff")
+        self._accent_text = (c.accent_text if c else "#151515")
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -140,34 +156,28 @@ class OnboardingOverlay(QWidget):
         self.card.setStyleSheet(
             f"""
             #onbCard {{
-                background: rgba(12, 12, 14, 250);
-                border: 2px solid rgba(255,255,255,220);
-                border-radius: 3px;
-                font-family: {_MONO};
+                background: {self._panel};
+                border: 1px solid {self._border};
+                border-radius: 10px;
             }}
-            #onbCard * {{ font-family: {_MONO}; }}
-            #onbTitle {{
-                color: #ffffff; font-size: 15px; font-weight: 700;
-                letter-spacing: 2px;
-            }}
-            #onbBody  {{ color: rgba(220,222,228,235); font-size: 12px; line-height: 150%; }}
-            #onbStep  {{ color: rgba(255,255,255,140); font-size: 10px; letter-spacing: 2px; }}
+            #onbTitle {{ color: {self._text}; font-size: 15px; font-weight: 700; }}
+            #onbBody  {{ color: {self._text}; font-size: 12.5px; }}
+            #onbStep  {{ color: {self._muted}; font-size: 11px; }}
             QPushButton {{
-                color: #ffffff; background: rgba(255,255,255,20);
-                border: 1px solid rgba(255,255,255,120); border-radius: 2px;
-                padding: 6px 14px; font-size: 11px; letter-spacing: 1px;
+                color: {self._text}; background: {self._panel};
+                border: 1px solid {self._border}; border-radius: 6px;
+                padding: 6px 14px; font-size: 12px;
             }}
-            QPushButton:hover {{ background: rgba(255,255,255,40); border-color: #ffffff; }}
-            QPushButton:disabled {{ color: rgba(255,255,255,55); border-color: rgba(255,255,255,35); }}
+            QPushButton:hover {{ border-color: {self._accent}; }}
+            QPushButton:disabled {{ color: {self._muted}; }}
             QPushButton#onbNext {{
-                color: #0c0c0e; background: #ffffff; border: 1px solid #ffffff; font-weight: 700;
+                color: {self._accent_text}; background: {self._accent};
+                border: 1px solid {self._accent}; font-weight: 600;
             }}
-            QPushButton#onbNext:hover {{ background: rgba(235,235,235,255); }}
             QPushButton#onbSkip {{
-                background: transparent; border: none; color: rgba(255,255,255,150);
-                text-decoration: underline;
+                background: transparent; border: none; color: {self._muted};
             }}
-            QPushButton#onbSkip:hover {{ color: #ffffff; }}
+            QPushButton#onbSkip:hover {{ color: {self._text}; }}
             """
         )
         lay = QVBoxLayout(self.card)
@@ -191,7 +201,7 @@ class OnboardingOverlay(QWidget):
         lay.addWidget(self._body)
 
         controls = QHBoxLayout()
-        self._dots = _Dots(len(self._steps))
+        self._dots = _Dots(len(self._steps), self._accent, self._muted)
         self._back_btn = QPushButton("Back")
         self._back_btn.clicked.connect(self._back)
         self._next_btn = QPushButton("Next", objectName="onbNext")
@@ -265,9 +275,9 @@ class OnboardingOverlay(QWidget):
     def _show_step(self, index: int, animate: bool = True) -> None:
         self._index = max(0, min(index, len(self._steps) - 1))
         step = self._steps[self._index]
-        self._title.setText(step.title.upper())
+        self._title.setText(step.title)
         self._body.setText(step.body)
-        self._step_label.setText(f"[ {self._index + 1:02d} / {len(self._steps):02d} ]")
+        self._step_label.setText(f"Step {self._index + 1} of {len(self._steps)}")
         self._dots.set_current(self._index)
         self._back_btn.setEnabled(self._index > 0)
         self._next_btn.setText("Finish" if self._index == len(self._steps) - 1 else "Next")
@@ -424,19 +434,11 @@ class OnboardingOverlay(QWidget):
             painter.drawPixmap(self._host_rect, self._sharp)  # crisp control inside the spotlight
             painter.restore()
 
-            # Crisp white pixel reticle: a hard square frame plus corner brackets
-            # that pulse. Antialiasing off so the edges stay blocky.
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+            # A soft, gently pulsing rounded ring in the theme accent.
             glow = abs(0.5 - self._pulse) * 2  # 0..1 triangle
-            frame = QColor(255, 255, 255, 120 + int(70 * glow))
+            ring = QColor(self._accent)
+            ring.setAlpha(150 + int(80 * glow))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(frame, 2))
-            painter.drawRect(spot)
-            # Bright corner brackets.
-            painter.setPen(QPen(QColor(255, 255, 255, 235), 3))
-            arm = 12
-            for cx, sx in ((spot.left(), 1), (spot.right(), -1)):
-                for cy, sy in ((spot.top(), 1), (spot.bottom(), -1)):
-                    painter.drawLine(cx, cy, cx + sx * arm, cy)
-                    painter.drawLine(cx, cy, cx, cy + sy * arm)
+            painter.setPen(QPen(ring, 2.5))
+            painter.drawPath(path)
         painter.end()

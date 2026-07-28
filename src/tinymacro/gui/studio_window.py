@@ -281,10 +281,12 @@ class StudioWindow(FramelessWindow):
         right.addSpacing(6)
         right.addWidget(_heading("Record & Play"))
         self.record_btn = self._big_button("record", "Record", color, self.toggle_recording)
-        # One dynamic transport button: Play / Stop / Resume depending on state.
+        # Play is a combined Play/Stop toggle; Pause/Resume is a separate button.
         self.play_btn = self._big_button("play", "Play", color, self.toggle_playback)
+        self.pause_btn = self._big_button("pause", "Pause", color, self.toggle_pause)
         right.addWidget(self.record_btn)
         right.addWidget(self.play_btn)
+        right.addWidget(self.pause_btn)
 
         right.addSpacing(6)
         right.addWidget(_heading("Settings"))
@@ -480,10 +482,7 @@ class StudioWindow(FramelessWindow):
 
     def toggle_playback(self) -> None:
         if self.player.state.playing:
-            if self.player.state.paused:
-                self.player.resume()  # continue from a breakpoint
-            else:
-                self.player.stop()
+            self.player.stop()  # Play/Stop toggle; Pause is a separate button
             self._update_state()
             return
         if not self.macro.events:
@@ -496,6 +495,15 @@ class StudioWindow(FramelessWindow):
         self._prepare_playhead(True)  # a plain Play drives the editor playhead
         self.player.start(self.macro, loop_count=self.loop_spin.value(), speed=self.speed_spin.value())
         self.logs.addItem(f"▶ Playback started ×{self.loop_spin.value() or '∞'}")
+        self._update_state()
+
+    def toggle_pause(self) -> None:
+        if not self.player.state.playing:
+            return
+        if self.player.state.paused:
+            self.player.resume()
+        else:
+            self.player.pause()
         self._update_state()
 
     def stop_all(self) -> None:
@@ -719,17 +727,17 @@ class StudioWindow(FramelessWindow):
         self.record_btn.setText("  Stop Rec" if recording else "  Record")
         self.record_btn.setIcon(get_icon("record", self._button_color("record"), 20))
         self.play_btn.setEnabled((bool(self.macro.events) or playing) and not recording)
-        # One dynamic transport button: Stop while playing (Resume when paused at a
-        # breakpoint), Play otherwise — with themeable per-button colours.
-        if playing and self.player.state.paused:
-            self.play_btn.setText("  Resume")
-            self.play_btn.setIcon(get_icon("play", self._button_color("play"), 20))
-        elif playing:
+        # Play is a combined Play/Stop toggle; Pause/Resume is its own button.
+        if playing:
             self.play_btn.setText("  Stop")
             self.play_btn.setIcon(get_icon("stop", self._button_color("stop"), 20))
         else:
             self.play_btn.setText("  Play")
             self.play_btn.setIcon(get_icon("play", self._button_color("play"), 20))
+        paused = self.player.state.paused
+        self.pause_btn.setEnabled(playing)
+        self.pause_btn.setText("  Resume" if paused else "  Pause")
+        self.pause_btn.setIcon(get_icon("play" if paused else "pause", self._button_color("pause"), 20))
 
     def _button_color(self, name: str) -> str:
         theme = current_theme()

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tiny-macro"
-version = "0.1.3.1"
+version = "0.1.3.2"
 description = "A deterministic PyQt6 macro recorder for Linux and Windows desktops."
 readme = "README.md"
 requires-python = ">=3.12"

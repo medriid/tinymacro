@@ -68,6 +68,40 @@ def test_pin_button_reflects_state(qtbot):
     assert "off" in win.top_action.toolTip()
 
 
+def test_three_transport_buttons_classic(qtbot):
+    win = _classic(qtbot)
+    win.macro = Macro(events=[MacroEvent(0, "key", "press", key="a")])
+    win.player.state.playing = True
+    win._update_state()
+    assert win.play_action.toolTip() == "Stop"  # play = play/stop toggle
+    assert win.pause_action.isEnabled()          # pause is its own button
+    assert win.pause_action.toolTip() == "Pause"
+    win.player.state.paused = True
+    win._update_state()
+    assert win.pause_action.toolTip() == "Resume"
+    win.player.state.playing = False
+    win.player.state.paused = False
+
+
+def test_studio_has_record_play_pause(qtbot):
+    studio = StudioWindow(Settings(onboarding_seen=True), FakeBackend(), persist_settings=False)
+    qtbot.addWidget(studio)
+    assert hasattr(studio, "record_btn")
+    assert hasattr(studio, "play_btn")
+    assert hasattr(studio, "pause_btn")
+
+
+def test_docs_dialog_categories(qtbot):
+    from tinymacro.gui.docs_dialog import CATEGORIES, DocsDialog
+
+    dlg = DocsDialog()
+    qtbot.addWidget(dlg)
+    assert dlg.list.count() == len(CATEGORIES)
+    dlg.list.setCurrentRow(2)
+    assert dlg.heading.text() == CATEGORIES[2][0]
+    assert "coming soon" in dlg.body.text().lower()
+
+
 def test_button_color_uses_theme_override(qtbot, tmp_path):
     theme = Theme(name="Btn", background=Background(kind="solid", color="#101010"),
                   button_colors={"play": "#123456"})

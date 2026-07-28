@@ -235,9 +235,9 @@ class MainWindow(FramelessWindow):
             self._themed_bg.set_paused(self.player.state.playing or not self.settings.animations)
 
     def _update_pin_button(self) -> None:
-        """White pin: filled when pinned (always-on-top), outline when not."""
+        """Pin fills when pinned (always-on-top), outlines when not; normal tint."""
         pinned = self.top_action.isChecked()
-        self.top_action.setIcon(get_icon("pin_filled" if pinned else "pin_outline", "#ffffff"))
+        self.top_action.setIcon(get_icon("pin_filled" if pinned else "pin_outline", self._icon_color()))
         self.top_action.setToolTip("Always on top: on" if pinned else "Always on top: off")
 
     def _button_color(self, name: str) -> str:
@@ -300,7 +300,7 @@ class MainWindow(FramelessWindow):
         self.open_action = self._action("open", "Open")
         self.save_action = self._action("save", "Save")
         self.record_action = self._action("record", "Record", checkable=True)
-        # One dynamic transport button: Play when idle, Stop while playing.
+        # The Play button is a combined Play/Stop toggle; Pause is separate.
         self.play_action = self._action("play", "Play")
         self.pause_action = self._action("pause", "Pause/Resume")
         self.step_action = self._action("step", "Step one event")
@@ -343,15 +343,17 @@ class MainWindow(FramelessWindow):
         self.library_action.triggered.connect(self.open_library)
         self.pref_action.triggered.connect(self.open_preferences)
         self.top_action.triggered.connect(self.toggle_always_on_top)
-        # The pin (always-on-top) button is managed manually: always a black
-        # button with a white pin that fills when pinned, outlines when not.
+        # The pin (always-on-top) button is managed manually so its *icon* is the
+        # only pinned indicator (filled vs outline) — the button keeps the normal
+        # greyish look even when checked, instead of turning into an accent block.
         self._icon_actions.pop(self.top_action, None)
         self.top_action.toggled.connect(lambda _c: self._update_pin_button())
         self.top_button = toolbar.widgetForAction(self.top_action)
         if self.top_button is not None:
             self.top_button.setStyleSheet(
-                "QToolButton { background: #000; border: 1px solid #000; }"
-                "QToolButton:hover { border-color: #ffffff; }"
+                "QToolButton:checked { background: palette(button); "
+                "border: 1px solid palette(mid); }"
+                "QToolButton:checked:hover { border-color: palette(highlight); }"
             )
         self._update_pin_button()
 
@@ -502,7 +504,7 @@ class MainWindow(FramelessWindow):
 
     def toggle_playback(self) -> None:
         if self.player.state.playing:
-            self.player.stop()
+            self.player.stop()  # Play/Stop toggle; Pause is a separate button
             self._update_state()
             return
         if not self.macro.events:
@@ -1226,11 +1228,15 @@ class MainWindow(FramelessWindow):
             self._themed_bg.set_paused(playing or not self.settings.animations)
         self.record_action.setChecked(recording)
         self.indicator.set_active(recording)
-        # One dynamic transport button: Stop while playing, Play otherwise.
-        self.play_action.setIcon(get_icon("stop" if playing else "play", self._button_color("stop" if playing else "play")))
+        # Play is a combined Play/Stop toggle; Pause/Resume is its own button.
+        play_name = "stop" if playing else "play"
+        self.play_action.setIcon(get_icon(play_name, self._button_color(play_name)))
         self.play_action.setToolTip("Stop" if playing else "Play")
         self.play_action.setEnabled((bool(self.macro.events) or playing) and not recording)
+        paused = self.player.state.paused
         self.pause_action.setEnabled(playing)
+        self.pause_action.setIcon(get_icon("play" if paused else "pause", self._button_color("pause")))
+        self.pause_action.setToolTip("Resume" if paused else "Pause")
         self.step_action.setEnabled(bool(self.macro.events) and not playing and not recording)
         self.editor_action.setEnabled(bool(self.macro.events))
         self.save_action.setEnabled(bool(self.macro.events))
