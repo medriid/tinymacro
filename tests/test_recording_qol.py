@@ -94,7 +94,9 @@ def test_settings_countdown_and_trim_round_trip():
     s.record_countdown = 3
     s.auto_trim_leading = True
     s.restore_window_on_undock = False
+    s.studio_aspect = "16:9"
     restored = Settings.from_dict(s.to_dict())
     assert restored.record_countdown == 3
     assert restored.auto_trim_leading is True
     assert restored.restore_window_on_undock is False
+    assert restored.studio_aspect == "16:9"

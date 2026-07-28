@@ -48,9 +48,11 @@ from tinymacro.gui.icons import app_icon, get_icon
 from tinymacro.gui.library_dialog import LibraryDialog
 from tinymacro.gui.playlist_dialog import PlaylistDialog
 from tinymacro.gui.log_dialog import LogDialog
+from tinymacro.gui.onboarding import OnboardingOverlay, OnboardingStep
 from tinymacro.gui.preferences import PreferencesDialog
 from tinymacro.gui.scheduler_dialog import SchedulerDialog
-from tinymacro.gui.theme import apply_theme, theme_manager
+from tinymacro.gui.theme import apply_theme, current_theme, theme_manager
+from tinymacro.gui.themed_background import ThemedBackground
 from tinymacro.gui.toast import ToastManager
 from tinymacro.gui.widgets import RecordingIndicator
 from tinymacro.notifications.base import LoopEvent, NotificationDispatcher
@@ -134,6 +136,8 @@ class MainWindow(FramelessWindow):
         # the run in progress (only true for a plain Play of the current macro).
         self._editor: EditorDialog | None = None
         self._playhead_active = False
+        self._onboarding: OnboardingOverlay | None = None
+        self._onboarding_pending = not self.settings.onboarding_seen
 
         self.dispatcher = NotificationDispatcher(
             on_error=lambda name, exc: self.bridge.notify_error.emit(f"{name}: {exc}")
@@ -178,6 +182,9 @@ class MainWindow(FramelessWindow):
         self._apply_mode()
         self._start_hotkeys()
         theme_manager.changed.connect(self._on_theme_changed)
+        self._themed_bg: ThemedBackground | None = None
+        theme_manager.changed.connect(lambda _c: self._refresh_themed_background())
+        self._refresh_themed_background()
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -215,6 +222,17 @@ class MainWindow(FramelessWindow):
         action = menu.addAction(get_icon(icon_name, self._icon_color()), text, slot)
         self._icon_actions[action] = icon_name
         return action
+
+    def _refresh_themed_background(self) -> None:
+        """Install/replace/remove the image-or-GIF backdrop for the active theme."""
+        if self._themed_bg is not None:
+            self._themed_bg.dispose()
+            self._themed_bg.deleteLater()
+            self._themed_bg = None
+        theme = current_theme()
+        if theme is not None and theme.background.kind in ("image", "animated"):
+            self._themed_bg = ThemedBackground(self, theme)
+            self._themed_bg.set_paused(self.player.state.playing or not self.settings.animations)
 
     def _on_theme_changed(self, colors) -> None:
         self.colors = colors
@@ -256,6 +274,7 @@ class MainWindow(FramelessWindow):
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Controls")
+        self.toolbar = toolbar
         toolbar.setMovable(False)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
 
@@ -622,6 +641,80 @@ class MainWindow(FramelessWindow):
             pass
         self._toast("Installed .tmacc association", "info")
 
+    # -- onboarding -----------------------------------------------------------
+    def _onboarding_steps(self) -> list[OnboardingStep]:
+        def tb(action):
+            return lambda: self.toolbar.widgetForAction(action)
+
+        return [
+            OnboardingStep(
+                "Welcome to Tiny Macro",
+                "A quick tour of the essentials — recording, playback, editing and "
+                "more. It takes about a minute. Use Next / Back, the arrow keys, or "
+                "press Esc to skip anytime.",
+            ),
+            OnboardingStep(
+                "Record",
+                "Hit Record (or the global hotkey) and Tiny Macro captures your "
+                "keyboard and mouse exactly, with faithful timing. Press it again — "
+                "or the hotkey — to stop.",
+                tb(self.record_action),
+            ),
+            OnboardingStep(
+                "Play it back",
+                "Play replays the macro with sub-millisecond timing, so every loop "
+                "is identical. Set how many loops and how fast right here.",
+                tb(self.play_action),
+            ),
+            OnboardingStep(
+                "Loops & speed",
+                "Loop 0 = forever. A small settling gap makes each loop feel like a "
+                "fresh run (toggle it in Preferences).",
+                lambda: self.loop_spin,
+            ),
+            OnboardingStep(
+                "Edit & debug",
+                "The Editor stays open while a macro plays: it highlights the current "
+                "step live, and you can right-click a step to set a breakpoint that "
+                "pauses playback there.",
+                tb(self.editor_action),
+            ),
+            OnboardingStep(
+                "Library & playlists",
+                "Keep your macros in the Library, and chain several into a Playlist "
+                "that plays back-to-back — both under the Tools menu.",
+                tb(self.library_action),
+            ),
+            OnboardingStep(
+                "Make it yours",
+                "Preferences covers hotkeys, themes, webhooks, timing and safety "
+                "options. You can replay this tour anytime from Tools → Guided Tour.",
+                tb(self.pref_action),
+            ),
+            OnboardingStep(
+                "Live feed",
+                "As you record or play, events stream here so you can see exactly "
+                "what Tiny Macro captured. That's it — press Record to begin!",
+                lambda: self.feed,
+            ),
+        ]
+
+    def start_onboarding(self, force: bool = False) -> None:
+        if getattr(self, "_onboarding", None) is not None:
+            return
+        if not force and self.settings.onboarding_seen:
+            return
+        overlay = OnboardingOverlay(self, self._onboarding_steps(), animated=self.settings.animations)
+        self._onboarding = overlay
+        overlay.finished.connect(self._on_onboarding_finished)
+        overlay.start()
+
+    def _on_onboarding_finished(self) -> None:
+        self._onboarding = None
+        if not self.settings.onboarding_seen:
+            self.settings.onboarding_seen = True
+            self._persist()
+
     # -- dialogs --------------------------------------------------------------
     def open_editor(self) -> None:
         # A single, non-modal editor that can stay open while a macro plays: the
@@ -642,6 +735,11 @@ class MainWindow(FramelessWindow):
         self._playhead_active = False
         self.player.breakpoints = set()
         self._editor = None
+
+    def _open_theme_editor(self) -> None:
+        from tinymacro.gui.theme_editor import ThemeEditor
+
+        ThemeEditor(self.settings, self, persist=self._persist).exec()
 
     def _on_breakpoints_changed(self, breakpoints: set) -> None:
         # Keep the running player in sync so toggling a breakpoint mid-run applies.
@@ -741,6 +839,8 @@ class MainWindow(FramelessWindow):
     def open_preferences(self) -> None:
         old_backend = self.settings.backend
         dialog = PreferencesDialog(self.settings, self)
+        dialog.replay_tour.connect(lambda: QTimer.singleShot(250, lambda: self.start_onboarding(force=True)))
+        dialog.open_theme_editor.connect(lambda: QTimer.singleShot(200, self._open_theme_editor))
         if dialog.exec():
             self._persist()
             self.player.allow_code_execution = self.settings.allow_code_execution
@@ -1095,6 +1195,10 @@ class MainWindow(FramelessWindow):
         # playhead highlight in the editor.
         if self._editor is not None and not playing:
             self._editor.clear_playing()
+        # Freeze an animated background while a macro plays (keeps CPU off the
+        # capture/replay path).
+        if self._themed_bg is not None:
+            self._themed_bg.set_paused(playing or not self.settings.animations)
         self.record_action.setChecked(recording)
         self.indicator.set_active(recording)
         self.play_action.setEnabled(bool(self.macro.events) and not recording)
@@ -1144,6 +1248,14 @@ class MainWindow(FramelessWindow):
         super().resizeEvent(event)
         if self.toasts._current is not None:
             self.toasts._current._reposition()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        # Launch the first-run tour once the window is on screen (so the snapshot
+        # it blurs is the fully painted UI).
+        if self._onboarding_pending:
+            self._onboarding_pending = False
+            QTimer.singleShot(600, self.start_onboarding)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if not self._closing:

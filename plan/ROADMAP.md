@@ -5,7 +5,7 @@ to build next, what to improve, and how to develop/build/release.
 
 ---
 
-## Current state (shipped in v0.1.2)
+## Current state (shipped in v0.1.3)
 
 - **Two UI variants** (both frameless, custom title bar/icons, animations):
   - **Classic** — compact toolbar UI, absolute-coordinate macros (`.tmacc`).
@@ -40,6 +40,14 @@ to build next, what to improve, and how to develop/build/release.
   target window to where it was (Preferences toggle).
 - **Window chrome**: the title-bar maximize button swaps between a full-window and
   a restore (two-window) glyph to mirror the window state, in both UIs.
+- **Cinematic onboarding**: a first-run guided tour (`gui/onboarding.py`) blurs the
+  window and spotlights each feature one at a time with a **crisp white, pixel-style
+  card** (monospace, square reticle with corner brackets), Back / Next / Skip (arrow
+  keys / Esc). It tracks the window wherever it is/resizes, runs once
+  (`onboarding_seen`) in whichever UI launches first, and is replayable from
+  **Preferences → Show Introduction** in both UIs.
+- **Studio dock aperture**: aspect lock (Free / 16:9 / Match-window) that
+  letterboxes the aperture; the choice persists.
 - **Recording fidelity**: only the *full* global-hotkey chord is swallowed, so
   plain letters used in a chord (c/r/s/p/m) and lone modifiers (Ctrl for
   Ctrl+C in the target app) record correctly.
@@ -78,12 +86,17 @@ to build next, what to improve, and how to develop/build/release.
 4. ~~**Undock leaves the target where it is**~~ — **done**: the target window's
    client rect is captured at dock time and restored on undock (toggle in
    Preferences, default on).
-5. **Studio: aspect-ratio lock options** (16:9 / match-target / free) for the
-   dock aperture.
+5. ~~**Studio: aspect-ratio lock options**~~ — **done**: a Studio selector locks
+   the dock aperture to Free / 16:9 / Match-window (the docked target's ratio);
+   `DockArea` letterboxes its inner frame and the choice persists.
 6. ~~**Macro chaining / playlists in the UI**~~ — **done**: `core/playlist.py` +
    `PlaylistDialog` (`.tmplist`), surfaced in both UIs.
 7. **GIF/preview export** of a macro (was deferred; needs Pillow/imageio).
-8. **First-run onboarding** + a few bundled sample macros.
+8. **First-run onboarding** — **done** (the guided tour); bundled sample macros
+   still TODO. `gui/onboarding.py` is a cinematic blurred-spotlight walk-through
+   (animated spotlight + card, Back/Next/Skip, arrow keys/Esc) that runs once on
+   first launch (`onboarding_seen`) and can be replayed from Guided Tour in both
+   UIs.
 
 ## Improvements / tech debt
 
@@ -177,6 +190,156 @@ online. Plus a public site where people browse/share macros per game.
 2. `tinymacro://` protocol handler + "Install from web" on a static macro page.
 3. Website + API + accounts (browse/upload/download macros).
 4. Cloud macro-library sync (per-account) pulled on connect; optional code-signing.
+
+---
+
+## Custom themes (`.tmactheme`) — shipped (phases 1–4)
+
+**Implemented**: full reskinning — a **solid colour, a PNG/JPG, or an animated
+GIF** background (fit modes + adjustable scrim), a chosen **accent/highlight**,
+translucent panel/text colours (surface opacity so the background shows through
+toolbars/lists/cards), and an optional UI font. Themes export as a single portable,
+gzip-compressed **`.tmactheme`** with base64-embedded assets — no external paths,
+cross-platform, safe to share.
+
+- `core/theme_pack.py` — pure `Theme`/`Background` model, base64 assets, strict
+  validation (hex colours, opacity ranges, fit/kind, image magic-byte sniffing,
+  per-asset + total size caps, WCAG contrast warnings), gzip save/`.tmactheme`
+  load (also reads plain JSON). Fully unit-tested.
+- `gui/themed_background.py` — a click-through, lowered `ThemedBackground` that
+  paints the still image or GIF (`QMovie`) per fit mode with a scrim; **paused
+  during playback and when animations are off** (perf/reduce-motion guard).
+- `gui/theme.py` — `apply_theme(Theme)` / `apply_theme_object` build the palette +
+  rgba-surface stylesheet and font override; built-in presets still work.
+- `gui/theme_editor.py` — live editor (colours, background, scrim/opacity sliders,
+  font), **Save & Use**, **Use Default**, and **Import/Export `.tmactheme`**,
+  reached from **Preferences → Appearance → Custom Themes…**. `Settings.active_theme`
+  persists the choice; themes live in `~/.config/tiny-macro/themes/`.
+
+**Still TODO** (phase 5): a theme gallery + workshop/site integration and cloud
+sync (below). Original design notes retained for reference:
+
+Goal: let users fully reskin Tiny Macro — a **solid colour, a PNG, or an animated
+GIF** as the window background, a chosen **accent/highlight**, and panel/text
+colours — then **export the whole look as a single portable `.tmactheme` file**
+that imports on any other machine (Windows or Linux) and looks identical. Themes
+are **pure data + bundled assets** (no code, no external file paths), so they are
+safe to share and inherently cross-platform.
+
+### A. What a theme controls
+
+Extend today's `ThemeColors` (in `gui/theme.py`) into a richer, serialisable
+`Theme`:
+
+- **Background layer** — one of:
+  - `solid`: a hex colour;
+  - `image`: a still PNG/JPG (tiled / centred / stretched / `cover` / `fit`);
+  - `animated`: a GIF/APNG played via `QMovie` (with a `fit` mode + optional
+    frame-rate cap and a "freeze on first frame" fallback).
+  Plus a **scrim**: an adjustable dark/light overlay alpha drawn *over* the
+  background so foreground text stays legible on busy images.
+- **Surfaces** — panel / elevated / border colours, each with an **opacity** so
+  the background shows through cards, toolbars and list rows (the key to making an
+  image background actually read as a theme rather than being hidden).
+- **Accent / highlight** — the existing accent + `accent_text`; drives buttons,
+  selections, the timeline playhead, progress chunks, checkboxes.
+- **Text** — text + muted colours (auto-contrast helper: warn/adjust when the
+  chosen text colour fails a WCAG-ish contrast ratio against the background).
+- **Kind colours** — the editor/timeline per-kind palette (`key/mouse/wheel/wait`).
+- **Font** — optional UI font family override (falls back to `UI_FONT_STACK`).
+- **Metadata** — `name`, `author`, `version`, `created_at`, and a small preview
+  thumbnail (base64 PNG) for a theme gallery.
+
+Rendering approach: a `ThemedBackground` widget painted behind the central widget
+(a custom `paintEvent` for solid/still images, a `QMovie`-driven `QLabel`/paint
+for GIFs), with the existing stylesheet regenerated so panels use `rgba(...)` from
+the surface opacities. Both `FramelessWindow` subclasses host it beneath their
+content; the onboarding overlay already blurs whatever is behind it, so it "just
+works" over a themed background.
+
+### B. The `.tmactheme` file format
+
+A single JSON document with **assets embedded as base64** so the file is
+self-contained and portable (no broken image paths across PCs/OSes):
+
+```jsonc
+{
+  "format": "tiny-macro-theme",
+  "version": 1,
+  "name": "Synthwave",
+  "author": "…",
+  "background": { "kind": "animated", "fit": "cover", "scrim": 0.35,
+                  "asset": "grid.gif", "fps_cap": 24 },
+  "surfaces": { "panel": "#181826", "panel_opacity": 0.82, "border": "#33334d", … },
+  "accent": "#ff5cae", "accent_text": "#0c0c12",
+  "text": "#f0f0ff", "muted": "#9aa0c0",
+  "kind_colors": { "key": "#…", "mouse": "#…", "wheel": "#…", "wait": "#…" },
+  "font_family": "",
+  "assets": { "grid.gif": "<base64>", "thumbnail": "<base64-png>" }
+}
+```
+
+Design decisions:
+- **Embedded, not referenced** assets → true portability and one-file sharing.
+- **Size discipline**: hard cap the packed file (e.g. ≤ 8–12 MB); warn on large
+  GIFs; downscale/re-encode oversized images on export; store a separate small
+  thumbnail so galleries don't decode full GIFs. Consider zlib-compressing the
+  JSON (`.tmactheme` = gzipped JSON) to shrink base64 overhead.
+- **Cross-platform correctness**: only hex colours + PNG/GIF bytes + family
+  *names*; never absolute paths, never platform fonts assumed present (missing
+  family → documented fallback). Pillow/Qt decode identically on Win/Linux.
+- **Versioned + forward-compatible** like the macro format: unknown keys ignored,
+  new optional keys only written when set.
+
+### C. Core + GUI work
+
+- `core/theme_pack.py` — pure, testable `Theme` dataclass with
+  `to_dict`/`from_dict`/`save`/`load`, asset (de)serialisation, validation
+  (colour syntax, opacity range, asset size/type sniffing, contrast check). No Qt,
+  so it unit-tests cleanly like `dock.py`/`playlist.py`.
+- `gui/theme.py` — `apply_theme` learns to take a `Theme` (built-in presets become
+  thin `Theme` instances), regenerating palette + stylesheet with rgba surfaces
+  and installing/removing the `ThemedBackground`.
+- `gui/theme_store.py` + a small on-disk themes dir (`~/.config/tiny-macro/themes`)
+  with an index, mirroring `MacroLibrary`.
+- **Theme editor dialog** — pick background (colour / "Choose image…" / "Choose
+  GIF…"), sliders for scrim + surface opacity, accent/text pickers, font, **live
+  preview** on a mini mock, and **Export…/Import…** (`.tmactheme`). A gallery of
+  saved themes with the thumbnails.
+- `Settings` gains `active_theme` (name or path) resolved on launch; built-in
+  presets stay the default so nothing changes unless a user opts in.
+
+### D. Safety, performance, reliability
+
+- **Untrusted input**: a `.tmactheme` is *data only*. Decode images through
+  Pillow/Qt with strict type/size caps; reject anything that isn't a valid
+  PNG/JPG/GIF; never execute anything; treat `name/author` as plain text in the
+  UI (no rich markup). This dovetails with the workshop's moderation story — a
+  future theme gallery on the site reuses the same validation.
+- **Animated backgrounds**: cap FPS + resolution; pause the `QMovie` when the
+  window is minimised/inactive or the macro is *playing* (so capture/replay timing
+  and CPU aren't disturbed); a global "reduce motion / disable animated
+  backgrounds" toggle (also honour the OS reduce-motion hint). Freeze to the first
+  frame as a low-power fallback.
+- **Legibility**: enforce a minimum scrim/contrast so text never becomes
+  unreadable on a wild background; offer an auto-scrim that samples the image.
+
+### E. Distribution tie-in
+
+Themes ride the same rails as macros: shareable single files now, and later
+first-class objects in the **workshop website** (browse/preview/download themes
+per game or vibe, `tinymacro://install?theme=…` deep links, cloud sync of a user's
+themes). The embedded-asset format means a theme downloaded on the site drops
+straight into the desktop app unchanged.
+
+### Suggested phase order
+
+1. `core/theme_pack.py` (`Theme` + `.tmactheme` load/save/validate) with tests.
+2. `apply_theme(Theme)` + `ThemedBackground` for **solid** and **still image**
+   backgrounds + surface opacity; wire built-in presets through it.
+3. Theme editor dialog with live preview + Import/Export.
+4. **Animated (GIF)** backgrounds via `QMovie` with the motion/perf guards.
+5. Theme gallery + workshop/site integration and cloud sync.
 
 ---
 

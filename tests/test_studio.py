@@ -11,7 +11,7 @@ from tinymacro.core.macro import DOCK_EXTENSION, Macro
 from tinymacro.core.settings import Settings
 from tinymacro.gui.anim import AnimatedToolButton
 from tinymacro.gui.framed_window import FramelessWindow
-from tinymacro.gui.studio_window import StudioWindow
+from tinymacro.gui.studio_window import DockArea, StudioWindow
 from tinymacro.gui.window_picker import WindowPicker
 
 
@@ -165,6 +165,49 @@ def test_undock_restores_window_geometry(qtbot):
     assert (55, 100, 200, 800, 600) in backend.moves
     assert win._target_hwnd is None
     assert win._pre_dock_rect is None
+
+
+def test_dock_area_letterboxes_to_aspect(qtbot):
+    area = DockArea()
+    qtbot.addWidget(area)
+    area.resize(1000, 1000)
+
+    area.set_aspect_ratio(None)  # free fills the whole area
+    assert (area.inner.width(), area.inner.height()) == (1000, 1000)
+
+    area.set_aspect_ratio(16 / 9)  # tall area → limited by width, centred vertically
+    assert area.inner.width() == 1000
+    assert area.inner.height() == round(1000 * 9 / 16)
+    assert area.inner.x() == 0
+    assert area.inner.y() == (1000 - area.inner.height()) // 2
+
+    area.resize(1600, 500)  # wide area → limited by height, centred horizontally
+    area.set_aspect_ratio(16 / 9)
+    assert area.inner.height() == 500
+    assert area.inner.width() == round(500 * 16 / 9)
+    assert area.inner.y() == 0
+    assert area.inner.x() == (1600 - area.inner.width()) // 2
+
+
+def test_studio_aspect_ratio_resolves_by_mode(qtbot):
+    win = StudioWindow(Settings(studio_aspect="16:9"), FakeBackend(), persist_settings=False)
+    qtbot.addWidget(win)
+    assert abs(win._aspect_ratio_value() - 16 / 9) < 1e-9
+    win.settings.studio_aspect = "free"
+    assert win._aspect_ratio_value() is None
+    win.settings.studio_aspect = "match"
+    assert win._aspect_ratio_value() is None  # no target docked yet
+    win._pre_dock_rect = (0, 0, 1000, 500)
+    assert abs(win._aspect_ratio_value() - 2.0) < 1e-9
+
+
+def test_studio_aspect_combo_applies(qtbot):
+    win = StudioWindow(Settings(), FakeBackend(), persist_settings=False)
+    qtbot.addWidget(win)
+    win.show()
+    win.aspect_combo.setCurrentIndex(1)  # "16:9"
+    assert win.settings.studio_aspect == "16:9"
+    assert win.dock._ratio is not None
 
 
 def test_undock_skips_restore_when_disabled(qtbot):

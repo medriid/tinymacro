@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QHBoxLayout,
+    QLabel,
     QLineEdit,
     QMessageBox,
+    QPushButton,
     QSpinBox,
     QDoubleSpinBox,
     QTabWidget,
@@ -22,6 +26,9 @@ from tinymacro.core.settings import THEME_PRESETS, Settings
 
 class PreferencesDialog(QDialog):
     """Tabbed preferences covering every configurable area of Tiny Macro."""
+
+    replay_tour = pyqtSignal()  # user asked to (re)watch the introduction
+    open_theme_editor = pyqtSignal()  # user asked to open the custom-theme editor
 
     def __init__(self, settings: Settings, parent=None) -> None:
         super().__init__(parent)
@@ -64,6 +71,9 @@ class PreferencesDialog(QDialog):
         self.speed.setValue(s.speed)
         self.tray_enabled = QCheckBox()
         self.tray_enabled.setChecked(s.tray_enabled)
+        self.show_intro_btn = QPushButton("Show Introduction")
+        self.show_intro_btn.setToolTip("Replay the guided tour of Tiny Macro.")
+        self.show_intro_btn.clicked.connect(self._request_tour)
 
         form = QFormLayout()
         form.addRow("Backend", self.backend)
@@ -71,7 +81,27 @@ class PreferencesDialog(QDialog):
         form.addRow("Default loops (0 = infinite)", self.loop_count)
         form.addRow("Default speed", self.speed)
         form.addRow("Show system tray icon", self.tray_enabled)
+        form.addRow("Introduction", self.show_intro_btn)
         return _wrap(form)
+
+    def _request_tour(self) -> None:
+        # Close Preferences, then let the host start the tour over the main window.
+        self.replay_tour.emit()
+        self.reject()
+
+    def _request_theme_editor(self) -> None:
+        self.open_theme_editor.emit()
+        self.reject()
+
+    @staticmethod
+    def _row(*widgets) -> QWidget:
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        for widget in widgets:
+            lay.addWidget(widget)
+        lay.addStretch(1)
+        return w
 
     def _build_appearance_tab(self) -> QWidget:
         s = self.settings
@@ -94,6 +124,15 @@ class PreferencesDialog(QDialog):
         self.density = QComboBox()
         self.density.addItems(["comfortable", "compact"])
         self.density.setCurrentText(s.density)
+        self.theme_editor_btn = QPushButton("Custom Themes…")
+        self.theme_editor_btn.setToolTip(
+            "Design a theme: image/GIF background, colours, opacity — and export/import "
+            "portable .tmactheme files."
+        )
+        self.theme_editor_btn.clicked.connect(self._request_theme_editor)
+        active = "  (a custom theme is active)" if s.active_theme else ""
+        self._active_theme_label = QLabel(active)
+        self._active_theme_label.setStyleSheet("color: palette(mid);")
 
         form = QFormLayout()
         form.addRow("Theme", self.theme)
@@ -101,6 +140,7 @@ class PreferencesDialog(QDialog):
         form.addRow("Custom accent", self.accent_color)
         form.addRow("UI scale", self.ui_scale)
         form.addRow("Density", self.density)
+        form.addRow("Custom themes", self._row(self.theme_editor_btn, self._active_theme_label))
         form.addRow("Start in compact mode", self.compact_mode)
         form.addRow("Enable animations", self.animations)
         return _wrap(form)

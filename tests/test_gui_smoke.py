@@ -32,7 +32,14 @@ def test_main_window_record_hotkey_toggles_recording(qtbot):
 
 
 def test_preferences_loop_default_updates_playback_controls(qtbot, monkeypatch):
+    class _Stub:
+        def connect(self, *_a, **_k) -> None:
+            pass
+
     class FakePreferencesDialog:
+        replay_tour = _Stub()  # mirrors the real dialog's signal interface
+        open_theme_editor = _Stub()
+
         def __init__(self, settings, parent=None) -> None:
             self.settings = settings
 

@@ -14,6 +14,7 @@ from PyQt6.QtCore import QObject, QPoint, QRect, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QRegion
 from PyQt6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
@@ -48,8 +49,10 @@ from tinymacro.gui.icons import get_icon
 from tinymacro.gui.library_dialog import LibraryDialog
 from tinymacro.gui.playlist_dialog import PlaylistDialog
 from tinymacro.gui.log_dialog import LogDialog
+from tinymacro.gui.onboarding import OnboardingOverlay, OnboardingStep
 from tinymacro.gui.scheduler_dialog import SchedulerDialog
-from tinymacro.gui.theme import apply_theme, icon_color, theme_manager
+from tinymacro.gui.theme import apply_theme, current_theme, icon_color, theme_manager
+from tinymacro.gui.themed_background import ThemedBackground
 from tinymacro.gui.toast import ToastManager
 from tinymacro.gui.window_picker import WindowPicker
 
@@ -71,6 +74,7 @@ class DockArea(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.setMinimumSize(560, 420)
+        self._ratio: float | None = None  # None = free (fill); else width/height lock
         self.inner = QFrame(self)
         self.inner.setObjectName("dockWell")
         self.inner.setFrameShape(QFrame.Shape.StyledPanel)
@@ -97,7 +101,28 @@ class DockArea(QWidget):
 
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
-        self.inner.setGeometry(0, 0, self.width(), self.height())
+        self._apply_layout()
+
+    def set_aspect_ratio(self, ratio: float | None) -> None:
+        """Lock the aperture to ``ratio`` (width/height), or None to fill freely."""
+        self._ratio = ratio if (ratio and ratio > 0) else None
+        self._apply_layout()
+
+    def _apply_layout(self) -> None:
+        """Place ``inner`` — full-bleed when free, else the largest centred rect of
+        the locked aspect ratio (letterboxed within the available area)."""
+        avail_w, avail_h = self.width(), self.height()
+        if self._ratio is None:
+            x, y, w, h = 0, 0, avail_w, avail_h
+        elif avail_h and avail_w / avail_h > self._ratio:
+            h = avail_h
+            w = round(h * self._ratio)
+            x, y = (avail_w - w) // 2, 0
+        else:
+            w = avail_w
+            h = round(w / self._ratio) if self._ratio else avail_h
+            x, y = 0, (avail_h - h) // 2
+        self.inner.setGeometry(x, y, w, h)
 
     def region(self) -> DockRegion:
         # Report the aperture in *physical* pixels: SetWindowPos (docking) and the
@@ -118,6 +143,7 @@ class DockArea(QWidget):
 
 class StudioWindow(FramelessWindow):
     switch_variant_requested = pyqtSignal(str)
+    _ASPECT_MODES = ("free", "16:9", "match")
 
     def __init__(
         self,
@@ -181,10 +207,13 @@ class StudioWindow(FramelessWindow):
         # Non-modal editor + whether the live playhead applies to the current run.
         self._editor: EditorDialog | None = None
         self._playhead_active = False
+        self._onboarding: OnboardingOverlay | None = None
+        self._onboarding_pending = not settings.onboarding_seen
 
         self.setMinimumSize(1100, 620)
         self.resize(1320, 760)
         self._build_ui()
+        self._apply_aspect()  # honour the persisted aspect lock
 
         self._tracker = QTimer(self)
         self._tracker.timeout.connect(self._track_dock)
@@ -193,9 +222,23 @@ class StudioWindow(FramelessWindow):
         self._state_timer.timeout.connect(self._update_state)
         self._state_timer.start(120)
         theme_manager.changed.connect(lambda c: self._retint(c))
+        self._themed_bg: ThemedBackground | None = None
+        theme_manager.changed.connect(lambda _c: self._refresh_themed_background())
+        self._refresh_themed_background()
         self._start_hotkeys()
         self._update_overview()
         self._update_state()
+
+    def _refresh_themed_background(self) -> None:
+        """Install/replace/remove the image-or-GIF backdrop for the active theme."""
+        if self._themed_bg is not None:
+            self._themed_bg.dispose()
+            self._themed_bg.deleteLater()
+            self._themed_bg = None
+        theme = current_theme()
+        if theme is not None and theme.background.kind in ("image", "animated"):
+            self._themed_bg = ThemedBackground(self, theme)
+            self._themed_bg.set_paused(self.player.state.playing or not self.settings.animations)
 
     # -- construction ---------------------------------------------------------
     def _build_ui(self) -> None:
@@ -228,6 +271,12 @@ class StudioWindow(FramelessWindow):
         right.addWidget(_heading("Window"))
         self.dock_btn = self._row_button("dock", "Dock Window", color, self._toggle_dock)
         right.addWidget(self.dock_btn)
+        self.aspect_combo = QComboBox()
+        self.aspect_combo.addItems(["Aspect: Free", "Aspect: 16:9", "Aspect: Match window"])
+        self.aspect_combo.setCurrentIndex(self._ASPECT_MODES.index(self.settings.studio_aspect))
+        self.aspect_combo.setToolTip("Lock the docking aperture's shape.")
+        self.aspect_combo.currentIndexChanged.connect(self._on_aspect_changed)
+        right.addWidget(self.aspect_combo)
 
         right.addSpacing(6)
         right.addWidget(_heading("Record & Play"))
@@ -257,12 +306,15 @@ class StudioWindow(FramelessWindow):
         right.addWidget(_heading("Macro"))
         right.addWidget(self._row_button("open", "Open", color, self.open_macro))
         right.addWidget(self._row_button("save", "Save", color, self.save_macro))
-        right.addWidget(self._row_button("editor", "Editor", color, self.open_editor))
+        self.editor_btn = self._row_button("editor", "Editor", color, self.open_editor)
+        right.addWidget(self.editor_btn)
 
         right.addSpacing(6)
         right.addWidget(_heading("Tools"))
-        right.addWidget(self._row_button("library", "Library", color, self.open_library))
-        right.addWidget(self._row_button("play", "Playlist", color, self.open_playlist))
+        self.library_btn = self._row_button("library", "Library", color, self.open_library)
+        right.addWidget(self.library_btn)
+        self.playlist_btn = self._row_button("play", "Playlist", color, self.open_playlist)
+        right.addWidget(self.playlist_btn)
         right.addWidget(self._row_button("scheduler", "Scheduler", color, self.open_scheduler))
         right.addWidget(self._row_button("logs", "Log Viewer", color, self.open_logs))
         right.addWidget(self._row_button("validate", "Validate", color, self.validate_macro))
@@ -291,6 +343,30 @@ class StudioWindow(FramelessWindow):
         button = QPushButton(get_icon(icon, color), text)
         button.clicked.connect(slot)
         return button
+
+    # -- aspect lock ----------------------------------------------------------
+    def _aspect_ratio_value(self) -> float | None:
+        """Resolve the current aspect mode to a width/height ratio (None = free)."""
+        mode = self.settings.studio_aspect
+        if mode == "16:9":
+            return 16 / 9
+        if mode == "match" and self._pre_dock_rect:
+            _, _, w, h = self._pre_dock_rect
+            return (w / h) if h else None
+        return None
+
+    def _apply_aspect(self) -> None:
+        """Push the resolved aspect ratio to the dock area and re-track the window."""
+        self.dock.set_aspect_ratio(self._aspect_ratio_value())
+        self._update_mask()
+        if self._target_hwnd is not None:
+            self._track_dock()
+
+    def _on_aspect_changed(self, index: int) -> None:
+        self.settings.studio_aspect = self._ASPECT_MODES[index]
+        if self.persist_settings and self._on_persist:
+            self._on_persist()
+        self._apply_aspect()
 
     # -- dock tracking --------------------------------------------------------
     def _dock_region(self) -> DockRegion | None:
@@ -360,6 +436,7 @@ class StudioWindow(FramelessWindow):
         self.macro = self.macro.copy_with(target_window=self._target_title)
         self.dock.set_docked(True)
         self.dock_btn.setText("Undock Window")
+        self._apply_aspect()  # "match" needs the just-captured target ratio
         self._track_dock()
         self._toast(f"Docked: {self._target_title}", "success")
         self._update_overview()
@@ -377,6 +454,7 @@ class StudioWindow(FramelessWindow):
         self._target_hwnd = None
         self.dock.set_docked(False)
         self.dock_btn.setText("Dock Window")
+        self._apply_aspect()  # "match" reverts to free once the target is gone
         self._update_mask()  # remove the see-through hole
         self._toast(f"Undocked: {title}" if title else "Undocked", "info")
         self._update_overview()
@@ -446,6 +524,12 @@ class StudioWindow(FramelessWindow):
         self._playhead_active = False
         self.player.breakpoints = set()
         self._editor = None
+
+    def _open_theme_editor(self) -> None:
+        from tinymacro.gui.theme_editor import ThemeEditor
+
+        persist = self._on_persist if (self.persist_settings and self._on_persist) else None
+        ThemeEditor(self.settings, self, persist=persist).exec()
 
     def _on_breakpoints_changed(self, breakpoints: set) -> None:
         self.player.breakpoints = set(breakpoints)
@@ -630,6 +714,8 @@ class StudioWindow(FramelessWindow):
         playing = self.player.state.playing
         if self._editor is not None and not playing:
             self._editor.clear_playing()  # playback ended → drop the live playhead
+        if self._themed_bg is not None:
+            self._themed_bg.set_paused(playing or not self.settings.animations)  # freeze GIF during playback
         self.dock_btn.setText("Undock Window" if self._target_hwnd is not None else "Dock Window")
         self.record_btn.setText("  Stop Rec" if recording else "  Record")
         self.play_btn.setEnabled(bool(self.macro.events) and not recording)
@@ -721,6 +807,8 @@ class StudioWindow(FramelessWindow):
         from tinymacro.gui.preferences import PreferencesDialog
 
         dialog = PreferencesDialog(self.settings, self)
+        dialog.replay_tour.connect(lambda: QTimer.singleShot(250, lambda: self.start_onboarding(force=True)))
+        dialog.open_theme_editor.connect(lambda: QTimer.singleShot(200, self._open_theme_editor))
         if not dialog.exec():
             return
         # Re-apply everything that can change from Preferences.
@@ -750,6 +838,75 @@ class StudioWindow(FramelessWindow):
         # Studio always opens maximized: the docked window fills a large, stable
         # aperture, and the dock tracker keeps adapting if the user restores/resizes.
         self.showMaximized()
+        if self._onboarding_pending:
+            self._onboarding_pending = False
+            QTimer.singleShot(600, self.start_onboarding)
+
+    # -- onboarding -----------------------------------------------------------
+    def _onboarding_steps(self) -> list[OnboardingStep]:
+        return [
+            OnboardingStep(
+                "Welcome to Studio",
+                "Studio docks a real window into a see-through aperture and records "
+                "clicks relative to it, so your macro replays at any size or "
+                "resolution. Here's a quick tour — Esc skips anytime.",
+            ),
+            OnboardingStep(
+                "Dock a window",
+                "Pick a window and Studio attaches it into the centre aperture. "
+                "Everything you record is stored relative to it.",
+                lambda: self.dock_btn,
+            ),
+            OnboardingStep(
+                "Lock the shape",
+                "Lock the aperture to Free, 16:9, or the docked window's own aspect "
+                "ratio — handy for games and fixed-layout apps.",
+                lambda: self.aspect_combo,
+            ),
+            OnboardingStep(
+                "Record",
+                "Record captures your input inside the docked window with faithful "
+                "timing. Drop screenshot points with the hotkey to attach a webhook "
+                "image from that exact instant.",
+                lambda: self.record_btn,
+            ),
+            OnboardingStep(
+                "Play it back",
+                "Play replays with sub-millisecond timing — identical every loop. "
+                "Set loops and speed just below.",
+                lambda: self.play_btn,
+            ),
+            OnboardingStep(
+                "Edit & debug",
+                "The Editor stays open while a macro plays, highlighting the current "
+                "step. Right-click a step to set a breakpoint that pauses playback.",
+                lambda: self.editor_btn,
+            ),
+            OnboardingStep(
+                "Library & playlists",
+                "Save Studio macros to the Library and chain them into Playlists. "
+                "You can replay this tour anytime with Guided Tour. Dock a window to "
+                "get started!",
+                lambda: self.library_btn,
+            ),
+        ]
+
+    def start_onboarding(self, force: bool = False) -> None:
+        if self._onboarding is not None:
+            return
+        if not force and self.settings.onboarding_seen:
+            return
+        overlay = OnboardingOverlay(self, self._onboarding_steps(), animated=self.settings.animations)
+        self._onboarding = overlay
+        overlay.finished.connect(self._on_onboarding_finished)
+        overlay.start()
+
+    def _on_onboarding_finished(self) -> None:
+        self._onboarding = None
+        if not self.settings.onboarding_seen:
+            self.settings.onboarding_seen = True
+            if self.persist_settings and self._on_persist:
+                self._on_persist()
 
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)

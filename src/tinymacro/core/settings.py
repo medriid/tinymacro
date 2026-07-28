@@ -32,6 +32,8 @@ class Settings:
     # Appearance
     theme_preset: str = "monochrome"
     accent_color: str = ""  # empty keeps the monochrome accent (black/white)
+    # Path to an active custom .tmactheme; empty uses the built-in preset above.
+    active_theme: str = ""
     compact_mode: bool = True
     animations: bool = True
     tray_enabled: bool = True
@@ -49,6 +51,11 @@ class Settings:
     # Studio: put the target window back to its original size/position on undock
     # (remembered at dock time). Off leaves it filling the aperture.
     restore_window_on_undock: bool = True
+    # Studio dock aperture aspect lock: "free" (fill), "16:9", or "match" (the
+    # docked window's own aspect ratio).
+    studio_aspect: str = "free"
+    # First-run guided tour: set once the user completes or skips onboarding.
+    onboarding_seen: bool = False
     # Recording quality-of-life
     record_countdown: int = 0  # seconds counted down before capture starts
     auto_trim_leading: bool = False  # drop idle time before the first action
@@ -100,6 +107,8 @@ class Settings:
             raise ValueError("Density must be 'comfortable' or 'compact'")
         if self.ui_variant not in ("classic", "studio"):
             raise ValueError("UI variant must be 'classic' or 'studio'")
+        if self.studio_aspect not in ("free", "16:9", "match"):
+            raise ValueError("Studio aspect must be 'free', '16:9', or 'match'")
         if self.autosave_seconds < 0:
             raise ValueError("Autosave interval must be zero or positive")
         self.hotkeys.validate()
@@ -117,6 +126,7 @@ class Settings:
             "speed": self.speed,
             "theme_preset": self.theme_preset,
             "accent_color": self.accent_color,
+            "active_theme": self.active_theme,
             "compact_mode": self.compact_mode,
             "animations": self.animations,
             "tray_enabled": self.tray_enabled,
@@ -127,7 +137,9 @@ class Settings:
             "humanize_jitter_ms": self.humanize_jitter_ms,
             "loop_gap_enabled": self.loop_gap_enabled,
             "loop_gap_ms": self.loop_gap_ms,
+            "onboarding_seen": self.onboarding_seen,
             "restore_window_on_undock": self.restore_window_on_undock,
+            "studio_aspect": self.studio_aspect,
             "record_countdown": self.record_countdown,
             "auto_trim_leading": self.auto_trim_leading,
             "autosave_seconds": self.autosave_seconds,
@@ -149,6 +161,7 @@ class Settings:
             speed=float(data.get("speed", 1.0)),
             theme_preset=str(data.get("theme_preset", "monochrome")),
             accent_color=str(data.get("accent_color", "")),
+            active_theme=str(data.get("active_theme", "")),
             compact_mode=bool(data.get("compact_mode", True)),
             animations=bool(data.get("animations", True)),
             tray_enabled=bool(data.get("tray_enabled", True)),
@@ -159,7 +172,9 @@ class Settings:
             humanize_jitter_ms=int(data.get("humanize_jitter_ms", 0)),
             loop_gap_enabled=bool(data.get("loop_gap_enabled", True)),
             loop_gap_ms=int(data.get("loop_gap_ms", 40)),
+            onboarding_seen=bool(data.get("onboarding_seen", False)),
             restore_window_on_undock=bool(data.get("restore_window_on_undock", True)),
+            studio_aspect=str(data.get("studio_aspect", "free")),
             record_countdown=int(data.get("record_countdown", 0)),
             auto_trim_leading=bool(data.get("auto_trim_leading", False)),
             autosave_seconds=int(data.get("autosave_seconds", 30)),
