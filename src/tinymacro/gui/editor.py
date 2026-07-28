@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSlider,
     QSpinBox,
+    QTextEdit,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -114,6 +115,8 @@ class EditorDialog(QDialog):
         self.insert_image_button.setToolTip("Insert a step that finds an image on screen and clicks it")
         self.insert_auto_button = QPushButton(get_icon("scheduler", color), "Automation…")
         self.insert_auto_button.setToolTip("Insert a run-command, wait-pixel, or wait-window step")
+        self.insert_text_button = QPushButton(get_icon("note", color), "Type Text…")
+        self.insert_text_button.setToolTip("Insert a step that types a string of text")
 
         tools1 = QHBoxLayout()
         for widget in (
@@ -139,6 +142,7 @@ class EditorDialog(QDialog):
         tools2.addWidget(self.insert_event_button)
         tools2.addWidget(self.insert_image_button)
         tools2.addWidget(self.insert_auto_button)
+        tools2.addWidget(self.insert_text_button)
         tools2.addStretch(1)
 
         if self.live:
@@ -200,6 +204,7 @@ class EditorDialog(QDialog):
         self.insert_event_button.clicked.connect(self.insert_event_step)
         self.insert_image_button.clicked.connect(self.insert_image_step)
         self.insert_auto_button.clicked.connect(self.insert_automation_step)
+        self.insert_text_button.clicked.connect(self.insert_text_step)
         self._populate()
 
     # -- history --------------------------------------------------------------
@@ -302,7 +307,7 @@ class EditorDialog(QDialog):
                 offset,
                 note,
             ]
-        if event.kind in ("run", "pixel", "window", "if", "else", "endif", "loop", "endloop"):
+        if event.kind in ("run", "pixel", "window", "if", "else", "endif", "loop", "endloop", "text", "screenshot"):
             # These synthetic steps are best summarised by their description.
             return [
                 str(source_index),
@@ -543,6 +548,35 @@ class EditorDialog(QDialog):
         indices = self._selected_source_indices()
         at = indices[0] if indices else len(self.macro.sorted_events())
         self._apply(self.macro.insert_event(at, dialog.build_event()))
+
+    def insert_text_step(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Type Text")
+        text_edit = QTextEdit()
+        text_edit.setPlaceholderText("Text to type…")
+        cps = QSpinBox()
+        cps.setRange(0, 500)
+        cps.setValue(20)
+        cps.setSuffix(" chars/sec (0 = instant)")
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("Type this text during playback:"))
+        layout.addWidget(text_edit, 1)
+        layout.addWidget(cps)
+        layout.addWidget(buttons)
+        dialog.resize(420, 260)
+        if not dialog.exec():
+            return
+        text = text_edit.toPlainText()
+        if not text:
+            return
+        indices = self._selected_source_indices()
+        at = indices[0] if indices else len(self.macro.sorted_events())
+        self._apply(self.macro.insert_event(at, MacroEvent.text_step(0, text, cps.value())))
 
     def edit_image_step(self, index: int) -> None:
         event = self.macro.sorted_events()[index]

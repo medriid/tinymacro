@@ -32,6 +32,7 @@ WHEEL_DELTA = 120
 INPUT_MOUSE = 0
 INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_UNICODE = 0x0004
 KEYEVENTF_SCANCODE = 0x0008
 KEYEVENTF_EXTENDEDKEY = 0x0001
 MAPVK_VK_TO_VSC = 0
@@ -665,6 +666,21 @@ class WindowsBackend(InputBackend):
             else:
                 return
         callback(pressed)
+
+    def type_text(self, text: str) -> None:
+        """Type arbitrary unicode via KEYEVENTF_UNICODE (layout-independent)."""
+        for ch in text:
+            code = ord(ch)
+            units = [code] if code <= 0xFFFF else [0xD800 + ((code - 0x10000) >> 10), 0xDC00 + ((code - 0x10000) & 0x3FF)]
+            for unit in units:
+                self._send_unicode(unit, False)
+            for unit in units:
+                self._send_unicode(unit, True)
+
+    def _send_unicode(self, unit: int, is_up: bool) -> None:
+        flags = KEYEVENTF_UNICODE | (KEYEVENTF_KEYUP if is_up else 0)
+        keybd = KEYBDINPUT(0, unit, flags, 0, 0)
+        self._send_input(INPUT(type=INPUT_KEYBOARD, union=INPUT_UNION(ki=keybd)))
 
     def _send_keyboard(self, vk_code: int, is_up: bool) -> None:
         """Inject a key using its hardware scan code.

@@ -374,6 +374,7 @@ class MainWindow(FramelessWindow):
         tools_menu = self.menu_bar().addMenu("Tools")
         self._menu_action(tools_menu, "library", "Macro Library", self.open_library)
         self._menu_action(tools_menu, "play", "Playlist", self.open_playlist)
+        self._menu_action(tools_menu, "scheduler", "Flow Builder", self.open_flow_builder)
         self._menu_action(tools_menu, "scheduler", "Scheduler", self.open_scheduler)
         self._menu_action(tools_menu, "validate", "Validate (dry run)", self.validate_macro)
         self._menu_action(tools_menu, "note", "Drop Marker (while recording)", self.drop_marker)
@@ -823,6 +824,13 @@ class MainWindow(FramelessWindow):
 
     def open_playlist(self) -> None:
         dialog = PlaylistDialog(self.library, docked=False, parent=self)
+        dialog.play_requested.connect(self._play_built_macro)
+        dialog.exec()
+
+    def open_flow_builder(self) -> None:
+        from tinymacro.gui.flow_builder import FlowBuilderDialog
+
+        dialog = FlowBuilderDialog(self.library, docked=False, parent=self)
         dialog.play_requested.connect(self._play_built_macro)
         dialog.exec()
 

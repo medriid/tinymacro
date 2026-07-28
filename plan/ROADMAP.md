@@ -5,7 +5,7 @@ to build next, what to improve, and how to develop/build/release.
 
 ---
 
-## Current state (shipped in v0.1.3.2)
+## Current state (shipped in v0.1.4)
 
 - **Two UI variants** (both frameless, custom title bar/icons, animations):
   - **Classic** — compact toolbar UI, absolute-coordinate macros (`.tmacc`).
@@ -28,6 +28,15 @@ to build next, what to improve, and how to develop/build/release.
   `PlaylistDialog`, `.tmplist` files) with per-item repeat and an inter-macro gap;
   variant-scoped (classic/Studio). Surfaced in both UIs; the stitched macro runs
   through the normal player, so loop/speed/notifications apply to the whole set.
+- **Visual flow builder + image-gated playlists** (`gui/flow_builder.py`): a node
+  canvas that wires macros into a Start→…→end flow, each with a repeat and an
+  optional **image gate** (snip a load-screen; the macro waits for it before it
+  plays). Exports **portable `.tmbundle` bundles** (`core/bundle.py`) that embed
+  the playlist + every macro + gate image, so they run on any machine/OS —
+  **optionally encrypted** (password or "open") via the build-only `securepack`
+  (Argon2id + AES-256-GCM).
+- **Text-type step**: `MacroEvent.text_step` types a string at a set chars/sec
+  (Windows unicode injection); inserted from the editor's "Type Text…".
 - **Live debugging editor**: the Macro Editor is non-modal and can stay open while
   a macro plays. It highlights the executing step in the event tree and the
   timeline (a green playhead), and supports **breakpoints** (right-click → Toggle
@@ -137,9 +146,9 @@ A living wishlist, grouped by area. Rough size/impact tags: (S)mall, (M)edium,
 (L)arge; ★ = high user value.
 
 ### Recording & playback engine
-- ★ **Text-type step (M)** — type a whole string at a configurable WPM instead of
-  raw key events; unicode-safe (uses scan codes / `SendInput` unicode). Editable
-  as text, not 40 key events.
+- ~~★ **Text-type step (M)**~~ — **done**: `MacroEvent.text_step` types a whole
+  string at a configurable chars/sec (Windows `KEYEVENTF_UNICODE`, layout-safe;
+  backends without unicode injection skip it). Insert via the editor's "Type Text…".
 - ★ **Window-relative recording for Classic (M)** — optionally anchor coordinates
   to the *active/target window* (not just the Studio dock), so classic macros
   survive the target window moving. Reuse the `dock.py` relative-coords engine.
@@ -232,6 +241,138 @@ A living wishlist, grouped by area. Rough size/impact tags: (S)mall, (M)edium,
 - **Macro snippet library (M)** — built-in reusable blocks (login, common waits).
 - **Run history & stats (S)** — per-macro run count, last run, average duration
   (extend `MacroLibrary`).
+
+---
+
+## Big bets: huge features (deep dives)
+
+The transformative, multi-release features. Each is large; the value is high
+enough to justify staging them carefully. They reinforce each other — self-healing
+targeting makes both AI authoring and cross-device replay reliable.
+
+### 1. Self-healing, vision-first targeting — "run-anywhere macros"
+
+**Problem.** Coordinate and single-template macros break the moment a window
+moves, resizes, is themed differently, or runs at another resolution. This is the
+#1 reason automation feels brittle.
+
+**Idea.** Every click/target carries an *ordered list of strategies*, tried in
+priority order at playback until one matches with enough confidence:
+1. absolute screen coords (fastest, least robust),
+2. window-relative coords (survives the window moving — reuse `dock.py`),
+3. image template match, multi-scale + grayscale (survives repositioning),
+4. **OCR text anchor** ("the button labelled *Login*"),
+5. **relative-to-anchor** ("40 px right of the *Search* icon").
+
+At record time Tiny Macro opportunistically captures *all* of these for each
+click (a small screenshot around the point, nearby OCR text, the relative offset
+to the closest strong anchor). At playback the `Resolver` returns the first hit
+and logs which strategy won, so users can see and trust it. Per-target confidence,
+timeout, retry and on-miss policy (already exist for image steps) generalise.
+
+**Architecture.**
+- `core/targeting.py`: a `Target` (list of `Strategy` + policy) and a `Resolver`
+  that, given a screen grab, evaluates strategies in order. Pure logic + the
+  existing `vision.Locator`; OCR behind the optional extra.
+- `MacroEvent` gains an optional `targets: list[Target]` (back-compat: absent →
+  today's behaviour). Player's `_emit_click` asks the resolver first.
+- Editor "target inspector": see/reorder/test each strategy with a live confidence
+  read-out; re-capture a strategy from the current screen.
+- Caching + a single screen grab per resolve to keep it cheap.
+
+**Phases.** (1) data model + resolver with coords + image; (2) OCR text anchors
+(Tesseract, optional dep); (3) relative-to-anchor; (4) record-time multi-strategy
+capture; (5) editor inspector + run diagnostics ("clicked *Login* via OCR, 0.94").
+
+**Risks.** Extra screen scans (mitigate: one grab, ordered short-circuit); false
+matches (confidence gates + anchor cross-checks); OCR dependency size (optional
+extra, lazy import).
+
+### 2. Natural-language macro authoring (AI assist)
+
+**Idea.** "Describe what you want and Tiny Macro builds — or edits — the macro."
+Two modes: **(a) offline authoring** (generate a reviewable macro from a
+description, no live control) and **(b) a guarded live agent** (observe screen →
+act → observe, with a kill switch) as a stretch.
+
+**Architecture.**
+- *Screen understanding*: capture screenshot(s); build a structured description of
+  the screen via OCR + lightweight UI-element detection (reusing #1's targeting).
+- *Planner*: an LLM turns the natural-language goal + screen context into a
+  sequence of Tiny Macro steps, **grounded** to on-screen targets from #1 (so
+  "click Login" becomes a text-anchor click, not a guessed coordinate). Provider
+  is configurable and **opt-in**: a **local model** (llama.cpp / Ollama) for
+  privacy, or a cloud API with a **user-supplied key**. Follow the
+  `docs/claude-api` guidance if wiring an Anthropic model.
+- *Review-before-run*: generated steps drop into the editor to inspect/tweak
+  before playback — never auto-execute.
+- *Live agent (mode b)*: an act→observe loop with hard guardrails — explicit
+  opt-in, per-action confirmation (or a strict action budget), the existing
+  code-exec gate stays **off**, and the always-visible kill switch stops it.
+
+**Safety & privacy (non-negotiable).** Nothing leaves the machine without
+consent; screenshots are opt-in and can be redacted; a local-model path needs no
+network at all; the agent cannot run shell/Python unless the user separately
+enables code-exec; every agent action is logged and reversible-by-stop.
+
+**Phases.** (1) NL → steps for explicit instructions grounded by text + coords;
+(2) vision grounding via element detection ("click the X"); (3) guarded live
+agent; (4) first-class local-model support + prompt/version management.
+
+**Risks.** Reliability/hallucinated actions (mitigated by grounding +
+review-before-run + budgets); privacy (opt-in + local option); dependency/size
+(optional extras). This is the highest-ambition, highest-payoff bet.
+
+### 3. Visual flow builder (node graph)
+
+**v1 shipped (playlist-focused)**: `gui/flow_builder.py` is a node canvas that
+builds an **image-gated playlist** — draggable macro cards wired into a Start→…
+sequence, each with a repeat count and an optional **image gate** (snip a
+load-screen; the macro waits for it before playing, via a no-click wait-for-image
+step). It plays the stitched macro and exports/imports **portable bundles**
+(below). Playlist gates live in `core/playlist.py` (`PlaylistItem.gate_*`);
+`.tmbundle` packing in `core/bundle.py`. Next: arbitrary branching + variables.
+
+**Original idea (fuller vision).** A node canvas for branching automations —
+triggers, conditions, loops, actions, sub-macros, variables — for flows the linear
+timeline can't express cleanly. Complements (not replaces) the timeline.
+
+**Architecture.** A `Flow` (nodes + typed edges) that **lowers to the existing
+linear `MacroEvent` stream** (if/else/loop already exist in the interpreter), so
+the player needs no new engine — execution reuses `on_step` to highlight the live
+node. Round-trip is constrained to a lowerable subset so graph↔linear stays
+consistent. Canvas via `QGraphicsView`; nodes are small widgets; variables
+(Backlog) feed condition nodes.
+
+**Phases.** (1) read-only graph view of an existing macro's control flow;
+(2) editable action/wait nodes; (3) branches/loops/sub-macros; (4) variables +
+simple expressions; (5) live execution highlight on the canvas.
+
+**Risks.** UI complexity; keeping the graph representable as linear events (solve
+by only allowing structures the interpreter supports).
+
+### 4. Cloud & multi-device
+
+**Idea.** Run and control macros beyond the one desktop.
+- **Remote/cloud execution**: a headless runner (reuse `export.py`'s runner) on a
+  VM/agent, triggered on a schedule or via API — for always-on automation.
+- **Mobile companion** (app or PWA): trigger/monitor macros, see live status and
+  screenshots, start/stop — over the **local HTTP trigger API** (Backlog) on the
+  LAN, or via the account/cloud (Distribution) anywhere.
+- **Record-here, play-there**: Studio's resolution-independent macros + #1's
+  strategy targeting make cross-machine replay actually reliable.
+
+**Architecture.** Builds directly on the Distribution plan (accounts, sync, the
+version-manifest API) and the local HTTP API; the runner already exists. Remote
+input is powerful, so: strong per-device auth, scoped tokens, an audit log, and an
+explicit "this device may be controlled remotely" opt-in with a visible indicator.
+
+**Phases.** (1) local HTTP trigger API + a minimal web/PWA controller on the LAN;
+(2) account-backed remote trigger + status; (3) scheduled cloud runs on a hosted
+agent; (4) full mobile app.
+
+**Risks.** Infra cost; security surface of remote input (the mitigations above are
+mandatory, not optional).
 
 ---
 

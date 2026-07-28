@@ -446,6 +446,8 @@ class Player:
             self._run_image_event(event, locator)
         elif event.kind in ("run", "pixel", "window"):
             self._run_automation_event(event, locator)
+        elif event.kind == "text":
+            self._type_text(event)
         elif event.kind == "screenshot" and self.screenshot_capturer is not None:
             try:
                 self._pending_screenshot = self.screenshot_capturer()
@@ -614,6 +616,34 @@ class Player:
         if event.on_missing == "fail":
             raise RuntimeError(f"Image not found within {event.timeout_ms} ms")
         # "skip" / "continue": fall through and keep playing.
+
+    # -- text-type step -------------------------------------------------------
+    def _type_text(self, event: MacroEvent) -> None:
+        """Type the step's text, paced at ``count`` chars/second (0 = instant)."""
+        text = event.command
+        if not text:
+            return
+        cps = event.count
+        if cps <= 0:
+            self._try_type(text)
+            return
+        interval_ns = int(1_000_000_000 / cps)
+        target = self.clock_ns()
+        for ch in text:
+            if self._stop_event.is_set():
+                return
+            self._wait_while_paused()
+            self._try_type(ch)
+            target += interval_ns
+            self._sleep_until(target)
+
+    def _try_type(self, text: str) -> None:
+        try:
+            self.backend.type_text(text)
+        except NotImplementedError:
+            pass  # backend can't type unicode → skip the step
+        except Exception:  # noqa: BLE001 - a failed keystroke must not break playback
+            pass
 
     # -- run / pixel / window steps -------------------------------------------
     def _run_automation_event(self, event: MacroEvent, locator) -> None:

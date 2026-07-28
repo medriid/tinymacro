@@ -316,6 +316,7 @@ class StudioWindow(FramelessWindow):
         right.addWidget(self.library_btn)
         self.playlist_btn = self._row_button("play", "Playlist", color, self.open_playlist)
         right.addWidget(self.playlist_btn)
+        right.addWidget(self._row_button("scheduler", "Flow Builder", color, self.open_flow_builder))
         right.addWidget(self._row_button("scheduler", "Scheduler", color, self.open_scheduler))
         right.addWidget(self._row_button("logs", "Log Viewer", color, self.open_logs))
         right.addWidget(self._row_button("validate", "Validate", color, self.validate_macro))
@@ -582,6 +583,13 @@ class StudioWindow(FramelessWindow):
 
     def open_playlist(self) -> None:
         dialog = PlaylistDialog(self.library, docked=True, parent=self)
+        dialog.play_requested.connect(self._play_built_macro)
+        dialog.exec()
+
+    def open_flow_builder(self) -> None:
+        from tinymacro.gui.flow_builder import FlowBuilderDialog
+
+        dialog = FlowBuilderDialog(self.library, docked=True, parent=self)
         dialog.play_requested.connect(self._play_built_macro)
         dialog.exec()
 

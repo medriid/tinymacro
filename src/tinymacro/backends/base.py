@@ -36,6 +36,14 @@ class InputBackend(ABC):
     def emit(self, event: MacroEvent) -> None:
         raise NotImplementedError
 
+    def type_text(self, text: str) -> None:
+        """Type ``text`` as unicode keyboard input.
+
+        Backends that can't inject arbitrary unicode raise ``NotImplementedError``;
+        the player then skips a text step rather than failing.
+        """
+        raise NotImplementedError("Backend does not support typing text")
+
     def start_hotkeys(self, callback: HotkeyCallback) -> None:
         raise NotImplementedError("Backend does not support global hotkeys")
 

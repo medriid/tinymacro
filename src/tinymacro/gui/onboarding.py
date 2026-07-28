@@ -59,8 +59,8 @@ class OnboardingStep:
 # Onboarding adopts the app's look: rounded surfaces, the UI font, theme colours.
 _SPOT_PAD = 8       # padding around the highlighted widget
 _SPOT_RADIUS = 8    # rounded corners to match the app's controls
-_BLUR_RADIUS = 16
-_DIM_ALPHA = 170
+_BLUR_RADIUS = 6    # a light blur — the UI stays recognisable behind the tour
+_DIM_ALPHA = 150
 
 
 def _colors():

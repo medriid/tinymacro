@@ -12,6 +12,7 @@ class FakeBackend(InputBackend):
         self.capture_callback: EventCallback | None = None
         self.hotkey_callback: HotkeyCallback | None = None
         self.emitted: list[MacroEvent] = []
+        self.typed: list[str] = []
         self.pointer_position_value: tuple[int, int] | None = None
 
     def start_capture(self, callback: EventCallback) -> None:
@@ -22,6 +23,9 @@ class FakeBackend(InputBackend):
 
     def emit(self, event: MacroEvent) -> None:
         self.emitted.append(event)
+
+    def type_text(self, text: str) -> None:
+        self.typed.append(text)
 
     def pointer_position(self) -> tuple[int, int] | None:
         return self.pointer_position_value

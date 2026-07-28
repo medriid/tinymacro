@@ -19,11 +19,11 @@ from typing import Any, Literal
 EventKind = Literal[
     "key", "mouse", "wheel", "wait", "image",
     "run", "pixel", "window", "if", "else", "endif", "loop", "endloop",
-    "screenshot",
+    "screenshot", "text",
 ]
 EventAction = Literal[
     "press", "release", "move", "scroll", "delay", "click",
-    "wait", "shell", "python", "branch", "repeat", "noop", "capture",
+    "wait", "shell", "python", "branch", "repeat", "noop", "capture", "type",
 ]
 
 # Only these kinds produce real input that is emitted to a backend; everything
@@ -238,6 +238,14 @@ class MacroEvent:
         """A marker that captures the screen during playback (for the webhook)."""
         return cls(timestamp_ns=timestamp_ns, kind="screenshot", action="capture", note=note)
 
+    @classmethod
+    def text_step(cls, timestamp_ns: int, text: str, cps: int = 0, note: str = "") -> "MacroEvent":
+        """Type ``text`` at ``cps`` characters/second (0 = as fast as possible)."""
+        return cls(
+            timestamp_ns=timestamp_ns, kind="text", action="type",
+            command=text, count=max(0, int(cps)), note=note,
+        )
+
     @property
     def is_input(self) -> bool:
         """True when the event produces real input (i.e. should be emitted).
@@ -327,6 +335,10 @@ class MacroEvent:
             return "end loop"
         if self.kind == "screenshot":
             return "screenshot point"
+        if self.kind == "text":
+            snippet = self.command.replace("\n", "⏎")
+            rate = f" @ {self.count}/s" if self.count else ""
+            return f'type "{snippet[:32]}"{rate}'
         if self.kind == "key":
             return f"key {self.action} {self.key}"
         if self.kind == "wheel":
@@ -381,6 +393,9 @@ class MacroEvent:
             if self.kind == "pixel":
                 data["confidence"] = self.confidence
         if self.kind == "loop":
+            data["count"] = self.count
+        if self.kind == "text":
+            data["command"] = self.command
             data["count"] = self.count
         # Relative Studio coordinates, emitted only when captured.
         if self.fx is not None and self.fy is not None:

@@ -21,31 +21,73 @@ import json
 from pathlib import Path
 from typing import Any
 
+from tinymacro.core.events import DEFAULT_CONFIDENCE, MacroEvent
 from tinymacro.core.macro import Macro
 
 FORMAT = "tiny-macro-playlist"
-FORMAT_VERSION = 1
+# v2 adds per-item image gates (wait for an image before the macro plays).
+FORMAT_VERSION = 2
 PLAYLIST_EXTENSION = ".tmplist"
 NANOSECONDS_PER_MS = 1_000_000
+DEFAULT_GATE_TIMEOUT_MS = 15_000
 
 
 @dataclass(slots=True)
 class PlaylistItem:
-    """One entry in a playlist: a macro file and how many times to repeat it."""
+    """One entry in a playlist: a macro file, a repeat count, and an optional
+    *image gate* — before this macro plays, wait until ``gate_image`` appears on
+    screen (up to ``gate_timeout_ms``). Perfect for "only start once the game has
+    loaded in" style sequencing.
+    """
 
     path: str
     repeat: int = 1
+    gate_image: str = ""                    # base64 PNG; empty = no gate
+    gate_confidence: float = DEFAULT_CONFIDENCE
+    gate_timeout_ms: int = DEFAULT_GATE_TIMEOUT_MS
+    gate_grayscale: bool = True
 
     @property
     def display_name(self) -> str:
         return Path(self.path).stem
 
+    @property
+    def has_gate(self) -> bool:
+        return bool(self.gate_image)
+
+    def gate_event(self) -> MacroEvent | None:
+        """A wait-for-image step (no click) to prepend before the macro."""
+        if not self.gate_image:
+            return None
+        return MacroEvent.image_click(
+            0, self.gate_image,
+            confidence=self.gate_confidence or DEFAULT_CONFIDENCE,
+            timeout_ms=self.gate_timeout_ms,
+            on_missing="continue",  # after the timeout, play anyway
+            click_button="none",    # wait for it; don't click
+            grayscale=self.gate_grayscale,
+            note="playlist gate",
+        )
+
     def to_dict(self) -> dict[str, Any]:
-        return {"path": self.path, "repeat": self.repeat}
+        data: dict[str, Any] = {"path": self.path, "repeat": self.repeat}
+        if self.gate_image:
+            data["gate_image"] = self.gate_image
+            data["gate_confidence"] = self.gate_confidence
+            data["gate_timeout_ms"] = self.gate_timeout_ms
+            data["gate_grayscale"] = self.gate_grayscale
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PlaylistItem":
-        return cls(path=str(data.get("path", "")), repeat=max(1, int(data.get("repeat", 1))))
+        return cls(
+            path=str(data.get("path", "")),
+            repeat=max(1, int(data.get("repeat", 1))),
+            gate_image=str(data.get("gate_image", "")),
+            gate_confidence=float(data.get("gate_confidence", DEFAULT_CONFIDENCE)),
+            gate_timeout_ms=int(data.get("gate_timeout_ms", DEFAULT_GATE_TIMEOUT_MS)),
+            gate_grayscale=bool(data.get("gate_grayscale", True)),
+        )
 
 
 @dataclass(slots=True)
@@ -80,6 +122,23 @@ class Playlist:
         if 0 <= index < len(self.items):
             self.items[index].repeat = max(1, int(repeat))
 
+    def set_gate(self, index: int, image: str, confidence: float | None = None,
+                 timeout_ms: int | None = None, grayscale: bool | None = None) -> None:
+        if not (0 <= index < len(self.items)):
+            return
+        item = self.items[index]
+        item.gate_image = image
+        if confidence is not None:
+            item.gate_confidence = confidence
+        if timeout_ms is not None:
+            item.gate_timeout_ms = timeout_ms
+        if grayscale is not None:
+            item.gate_grayscale = grayscale
+
+    def clear_gate(self, index: int) -> None:
+        if 0 <= index < len(self.items):
+            self.items[index].gate_image = ""
+
     # -- build ----------------------------------------------------------------
     def build(self, loader: Callable[[str], Macro]) -> Macro:
         """Load every item and stitch them into one macro, in order.
@@ -97,6 +156,12 @@ class Playlist:
             macro = loader(item.path)
             if item.repeat > 1:
                 macro = macro.repeated(item.repeat, gap_ns=gap_ns)
+            gate = item.gate_event()
+            if gate is not None:
+                # Wait for the gate image, then play the macro (once, before repeats
+                # is already handled above — the gate fires once per item).
+                gate_macro = Macro(events=[gate], docked=self.docked)
+                macro = gate_macro.then(macro, gap_ns=0)
             parts.append(macro)
         chained = Macro.chain(parts, gap_ns=gap_ns, name=self.name)
         return chained.copy_with(docked=self.docked)
