@@ -167,6 +167,15 @@ class FramelessWindow(QMainWindow):
     # -- open / close animations ----------------------------------------------
     def showEvent(self, event):  # noqa: N802
         super().showEvent(event)
+        # Re-assert the icon on the *native* window every time it's shown. Setting
+        # it in __init__ only stores it until the platform window exists; Studio
+        # shows itself maximized as its very first show, a path where Windows
+        # otherwise never receives WM_SETICON and the taskbar button falls back to
+        # a blank/default glyph. Pushing it onto the QWindow here fixes that and is
+        # cheap enough to repeat (also covers a stay-on-top flag recreation).
+        handle = self.windowHandle()
+        if handle is not None:
+            handle.setIcon(app_icon())
         if not self._opened:
             self._opened = True
             if self._animated:

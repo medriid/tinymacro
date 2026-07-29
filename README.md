@@ -1,242 +1,285 @@
+<div align="center">
+
 # Tiny Macro
 
-Tiny Macro is a monochrome PyQt6 macro recorder for Linux and Windows, designed
-as a TinyTask-style alternative that scales up into a fuller automation tool
-without losing its lightweight, keep-it-on-top footprint.
+**A deterministic, keep-it-on-top macro recorder for Windows, macOS, and Linux.**
 
-## Features
+TinyTask-style simplicity that scales up into a real automation studio — precise
+replay, a live editor, playlists, image-aware steps, custom themes, and portable
+encrypted bundles.
 
-### Two UI variants
+[![CI](https://github.com/medriid/tinymacro/actions/workflows/ci.yml/badge.svg)](https://github.com/medriid/tinymacro/actions/workflows/ci.yml)
+[![Release](https://github.com/medriid/tinymacro/actions/workflows/release.yml/badge.svg)](https://github.com/medriid/tinymacro/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/medriid/tinymacro?sort=semver)](https://github.com/medriid/tinymacro/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
+![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-informational)
 
-Tiny Macro ships with two switchable, **frameless** interfaces (custom title bar,
-window controls, and animations):
+</div>
 
-- **Classic** — the compact toolbar window for everyday absolute-coordinate
-  macros (`.tmacro`).
-- **Studio** — a wide recessed frame that **docks a selected window** in the center
-  (logs + overview on the left, macro options on the right). Everything recorded
-  is stored **relative to the docked window**, so a Studio macro (`.tmacd`)
-  replays at any resolution/window size and is **shareable**. Switch between the
-  two from the View menu (Classic) or the side panel (Studio). The two macro
-  formats are intentionally not interchangeable. Docking is Windows-only.
+---
 
-### Interface
+## Contents
 
-- Compact-by-default window (the classic toolbar footprint) that expands into a
-  live view with a playback progress bar and a real-time event feed while
-  recording. Toggle with the **Expand / Collapse** button or the View menu.
-- Monochrome black/white/gray identity by default, with optional color presets
-  (slate, amber, emerald, violet) and a custom accent color. Monochrome remains
-  a fully supported first-class theme.
-- Subtle animations: a pulsing record indicator, animated playback progress, and
-  transient toast notifications (all disableable in Preferences → Appearance).
-- Optional **system tray** icon with quick record/play/stop and show/hide.
-- Tabbed Preferences (General, Appearance, Capture, Hotkeys, Notifications,
-  Advanced).
+- [Why Tiny Macro](#why-tiny-macro)
+- [Platform support](#platform-support)
+- [Download](#download)
+- [Install from source](#install-from-source)
+- [Permissions](#permissions)
+- [Features](#features)
+- [Macro formats](#macro-formats)
+- [Building your own binaries](#building-your-own-binaries)
+- [Automated releases (CI)](#automated-releases-ci)
+- [Development](#development)
+- [Scope & safety](#scope--safety)
+- [License](#license)
 
-### Recording & playback
+## Why Tiny Macro
 
-- Deterministic playback based on monotonic nanosecond timestamps.
-- **Pause/resume recording**, adjustable mouse-move sampling rate to thin dense
-  motion, and undo-last-segment while still recording.
-- **Pause/resume playback**, **step-through** one event at a time, and a
-  **dry-run validation** that checks a macro for structural problems without
-  sending real input.
-- Optional playback timing jitter for realistic QA/testing runs.
-- Cursor start-position recording with relative mouse motion accumulated into
-  absolute positions for exact replay.
+Tiny Macro records mouse and keyboard input and replays it **exactly** — timing
+is reconstructed from monotonic nanosecond timestamps, not guessed. It starts as
+a tiny always-on-top toolbar and expands, only when you want it, into a full
+editor with a timeline, breakpoints, conditionals, image matching, scheduling,
+and notifications.
 
-### Editing & composition
+Two interchangeable interfaces ship in one app:
 
-- Rebuilt timeline editor: color-coded events by kind, search/filter, inline
-  note editing, insert **wait steps** (fixed or random-range delays), bulk
-  delete, keep-range, timing scale, and in-session **undo/redo**.
-- **Editor power-ups**: insert any key/mouse/wheel event by hand, duplicate,
-  copy/paste, reorder, a right-click context menu, and **Run from here**.
-- A zoomable **graphical timeline track** beside the table, synced to the
-  selection.
-- Macro composition helpers: chain/playlist multiple macros and repeat a macro
-  N times (see `Macro.then`, `Macro.chain`, `Macro.repeated`).
-- Consecutive mouse movements collapse into expandable **movement groups** in the
-  editor timeline, so clicks and key events stay easy to find.
+- **Classic** — the compact toolbar for everyday absolute-coordinate macros.
+- **Studio** — a wide frame that **docks a target window** in the centre and
+  records everything *relative* to it, so the macro replays at any resolution or
+  window size and is shareable.
 
-### Visual automation (optional `vision` extras)
+Switch between them any time from the View menu (Classic) or the side panel
+(Studio).
 
-- **Click-Image step**: insert a step that searches the screen for an uploaded
-  image and clicks it once found, with adjustable **match confidence**, timeout,
-  click button/offset, and an on-missing policy (fail / skip / continue). The
-  target image is embedded in the `.tmacro`, so macros stay self-contained.
-- **Image-trigger scheduler**: a second scheduler variant that runs a macro
-  **whenever a target image appears on screen**. Its loop count caps how many
-  sightings it acts on, and the trigger is suppressed while its macro plays so it
-  never re-fires on the same still-visible image.
-- Needs the `vision` extras (`pip install "tiny-macro[vision]"`: OpenCV + mss).
-  These are bundled in the prebuilt binaries. Screen capture works on Windows and
-  X11; on pure Wayland it degrades gracefully with a clear message.
+## Platform support
 
-### Control flow & automation steps
+| Capability | Windows | macOS | Linux (X11) | Linux (Wayland) |
+|---|:---:|:---:|:---:|:---:|
+| Record & replay | ✅ | ✅ | ✅ | ✅ |
+| Global hotkeys | ✅ | ✅ | ✅ | ✅ |
+| Text-type step | ✅ | ✅ | ✅ | ✅ |
+| Window docking (Studio) | ✅ | — | — | — |
+| Image steps / triggers (`vision`) | ✅ | ✅ | ✅ | ⚠️ degrades |
+| Backend | native hooks + `SendInput` | Quartz via `pynput` | `pynput` | `evdev` / `uinput` |
+| Extra setup | run as admin for elevated apps | grant Accessibility + Input Monitoring | — | `input` group + udev rule |
 
-- **Conditionals and loops**: wrap steps in an `if (image on screen) … else …`
-  block, or a `loop ×N` block, right from the editor. Playback interprets them
-  with proper nesting.
-- **Wait-for-pixel** (screen colour) and **wait-for-window** (active title) steps.
-- **Run step**: execute a shell command or Python snippet — **off by default**
-  behind a clearly-warned "Allow code-execution steps" preference.
-- Keyboard playback automatically returns focus to your target window, so
-  recorded keystrokes land where you intend (not in Tiny Macro's own window).
+✅ supported · ⚠️ partial · — not available. See [Permissions](#permissions)
+for the macOS and Linux one-time setup.
 
-### Automation & integrations
+## Download
 
-- **Macro library**: a local index of your macros with favorites, tags, search,
-  recents, and run counts — independent of the OS file picker.
-- **Scheduler**: run a macro on an interval, once at a time, daily, or when an
-  image appears on screen (see above).
-- **Settings profiles**: keep multiple named configurations and import/export
-  them as JSON.
-- **Pluggable notifications**: Discord webhook (with templated embeds and
-  optional screenshot), a generic HTTP(S) webhook, and native tray/toast
-  notifications on loop completion.
-- **Autosave & crash recovery** of an in-progress macro, plus structured
-  logging to a rotating file with an in-app log viewer.
+Grab a prebuilt binary from the [**latest release**](https://github.com/medriid/tinymacro/releases/latest):
 
-### Platform & format
+| OS | File | Run it |
+|---|---|---|
+| Windows | `tiny-macro-windows.exe` | double-click |
+| macOS | `tiny-macro-macos` | `chmod +x tiny-macro-macos && ./tiny-macro-macos` |
+| Linux | `tiny-macro-linux` | `chmod +x tiny-macro-linux && ./tiny-macro-linux` |
 
-- X11 backend through `pynput`; Wayland backend through `evdev`/`uinput`;
-  Windows backend through native hooks and `SendInput`.
-- Native `.tmacro` JSON macro format, now at **format version 4** (adds wait
-  steps, per-event notes, macro tags, click-image steps, and control-flow /
-  automation steps). Older files load unchanged and are upgraded on load.
-- Exportable standalone macro runner scripts.
-- Customizable global hotkeys and an optional debug mode with detailed errors.
+> **macOS Gatekeeper:** the binary is unsigned, so the first launch needs
+> right-click → **Open** (or *System Settings → Privacy & Security → Open
+> Anyway*). Then grant the permissions below.
 
-> **Scope note:** Tiny Macro is a desktop automation and QA/testing tool.
-> Timing jitter exists to make test playback realistic, not to defeat
-> anti-cheat, anti-bot, or DRM systems.
+The binaries bundle the optional image-matching stack, so no extra install is
+needed for the vision features.
 
-## Verifying without pytest
+## Install from source
 
-If you don't have `pytest` installed, `python scripts/selfcheck.py` runs the
-non-GUI test suite using only the standard library. Install the `dev` extras and
-run `pytest` for the full suite, including the PyQt6 GUI smoke tests.
-
-## Install On Arch Linux
+Requires **Python 3.12+**.
 
 ```bash
-sudo pacman -S python python-pyqt6 python-pynput python-evdev
+git clone https://github.com/medriid/tinymacro.git
+cd tinymacro
 python -m pip install -e .
 tiny-macro
 ```
 
-Wayland capture and playback require access to `/dev/input/event*` and
-`/dev/uinput`. Prefer a dedicated input group or udev rule instead of running
-the full GUI as root.
-
-## Build A Sendable Wayland Binary On Arch
-
-If your friend has a fresh Arch install and may have nothing ready, send them
-the project folder or `tiny-macro-arch-wayland-build-kit.zip`, then have them
-run:
+Add the on-screen image-matching features with the `vision` extra:
 
 ```bash
-mkdir -p ~/tiny-macro-build-kit
-unzip ~/Downloads/tiny-macro-arch-wayland-build-kit.zip -d ~/tiny-macro-build-kit
-cd ~/tiny-macro-build-kit
-bash scripts/build_arch_wayland.sh
+python -m pip install -e ".[vision]"
 ```
 
-Do not run the script from inside an archive preview window. Fully extract the
-zip into a normal writable folder first. If they see `Permission denied` for a
-path like `src/tinymacro/__pycache__`, run:
+**Platform notes**
 
-```bash
-cd ~/tiny-macro-build-kit
-sudo chown -R "$USER:$USER" .
-chmod -R u+rwX .
-bash scripts/build_arch_wayland.sh
-```
+- **Windows** — no extra packages; native input is driven through `ctypes`.
+- **macOS** — `pip` pulls in `pynput` and the `pyobjc` Quartz bridge automatically.
+- **Linux (Arch)** — `sudo pacman -S python python-pyqt6 python-pynput python-evdev`.
 
-The script checks every major prerequisite before building:
+Pick a backend explicitly with `tiny-macro --backend {auto,windows,macos,x11,wayland,fake}`
+if auto-detection guesses wrong.
 
-- Confirms it is running on Linux.
-- Checks that the distro is Arch or Arch-like.
-- Checks `pacman`, `sudo`, Python, pip, and venv support.
-- Checks that the extracted project folder is writable.
-- Removes stale Python `__pycache__` folders.
-- Redirects Python cache files into `.pycache-build`.
-- Installs missing pacman packages with `sudo pacman -S --needed`.
-- Creates a clean `.venv-build`.
-- Installs this project plus PyInstaller.
-- Builds `dist/tiny-macro-wayland`.
-- Writes `dist/README-WAYLAND.txt` with runtime permission steps.
+## Permissions
 
-After the build finishes, they can run:
+### macOS
 
-```bash
-./dist/tiny-macro-wayland --backend wayland
-```
+macOS gates global input behind its privacy system (TCC). Open **System Settings
+→ Privacy & Security** and enable Tiny Macro under:
 
-### Wayland Permission Setup
+- **Accessibility** — required to replay input.
+- **Input Monitoring** — required to record input.
+- **Screen Recording** — only if you use the image steps/triggers.
 
-Wayland blocks normal apps from globally recording and replaying input. This
-project's Wayland backend uses Linux input devices directly, so the user needs
-permission for `/dev/input/event*` and `/dev/uinput`.
+When running from source the grant attaches to your terminal (or Python), not to
+Tiny Macro itself. Quit and reopen after granting. If capture is silent, this is
+almost always the cause — Tiny Macro will tell you so on startup.
 
-Recommended setup:
+### Linux (Wayland)
+
+Wayland blocks apps from globally recording/replaying input, so the backend talks
+to the kernel input devices directly and needs access to `/dev/input/event*` and
+`/dev/uinput`:
 
 ```bash
 sudo groupadd -f input
 sudo usermod -aG input "$USER"
-printf 'KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"\n' | sudo tee /etc/udev/rules.d/99-tiny-macro-uinput.rules
+printf 'KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"\n' \
+  | sudo tee /etc/udev/rules.d/99-tiny-macro-uinput.rules
 sudo udevadm control --reload-rules
 sudo modprobe uinput
 ```
 
-Then log out and back in. Check permissions with:
+Log out and back in, then verify with `groups`, `ls -l /dev/uinput`, and
+`ls -l /dev/input/event*`. Prefer this group/udev setup over running the GUI as
+root. X11 needs no special permissions.
+
+## Features
+
+**Recording & playback**
+- Deterministic replay from monotonic nanosecond timestamps.
+- Pause/resume recording, adjustable mouse-move sampling, undo-last-segment.
+- Pause/resume playback, single-step, and a dry-run validator that checks a
+  macro for structural problems without sending real input.
+- Optional timing jitter for realistic QA runs; cursor start-position capture.
+
+**Editing & composition**
+- Timeline editor with colour-coded events, search/filter, inline notes, insert
+  wait steps (fixed or random-range), bulk delete, keep-range, timing scale, and
+  undo/redo.
+- Insert any key/mouse/wheel event by hand; duplicate, copy/paste, reorder,
+  right-click menu, and **Run from here**.
+- A zoomable graphical timeline track synced to the selection; consecutive mouse
+  moves collapse into expandable movement groups.
+- **Playlists / flow builder** — chain macros, repeat ×N, and gate steps on an
+  image appearing on screen.
+
+**Control flow & steps**
+- `if (image on screen) … else …` and `loop ×N` blocks with proper nesting.
+- Wait-for-pixel and wait-for-window steps; a **text-type** step for arbitrary
+  unicode.
+- **Run step** (shell/Python) — off by default behind a clearly-warned preference.
+
+**Visual automation** (optional `vision` extra)
+- **Click-Image step**: find an uploaded image on screen and click it, with
+  adjustable confidence, timeout, button/offset, and on-missing policy. The
+  target image is embedded in the macro, so it stays self-contained.
+- **Image-trigger scheduler**: run a macro whenever a target image appears.
+
+**Automation & integrations**
+- Macro library with favorites, tags, search, recents, and run counts.
+- Scheduler (interval / once / daily / on-image).
+- Settings profiles with JSON import/export.
+- Notifications: Discord webhook (templated embeds + optional screenshot),
+  generic HTTP webhook, and native tray/toast on completion.
+- Autosave & crash recovery, plus rotating structured logs with an in-app viewer.
+
+**Interface**
+- Two frameless UIs (custom title bar, window controls, animations).
+- Monochrome by default, with colour presets, fully custom themes (image/animated
+  backgrounds), per-button accents, and a themed colour picker.
+- Subtle hover/press animations and optional UI sounds (toggle in Preferences).
+- Optional system-tray icon; guided first-run onboarding.
+- **Portable bundles** — export a playlist and its macros/assets as a single
+  `.tmbundle`, optionally password-encrypted (Argon2id + AES-256-GCM).
+
+## Macro formats
+
+- Classic macros are `.tmacro` JSON (currently **format version 4**). Older files
+  load unchanged and upgrade on load.
+- Studio macros are `.tmacd` and store input relative to the docked window.
+- The two formats are intentionally **not** interchangeable.
+- Macros are not binary-compatible with TinyTask `.rec` files. Standalone runner
+  scripts can be exported.
+
+## Building your own binaries
+
+Each platform builds a single self-contained executable with
+[PyInstaller](https://pyinstaller.org/):
 
 ```bash
-groups
-ls -l /dev/uinput
-ls -l /dev/input/event* | head
+python -m pip install -e ".[build,vision]"
 ```
 
-Avoid running the full GUI as root except for a short temporary test.
+| OS | Command | Output |
+|---|---|---|
+| Windows | `pyinstaller --clean --noconfirm packaging/tiny-macro-windows.spec` | `dist/tiny-macro-windows.exe` |
+| macOS | `pyinstaller --clean --noconfirm packaging/tiny-macro-macos.spec` | `dist/tiny-macro-macos` |
+| Linux | `pyinstaller --clean --noconfirm packaging/tiny-macro-wayland.spec` | `dist/tiny-macro-wayland` |
 
-## Build A Sendable Windows EXE
+On Windows you can also run `scripts\build_windows.ps1`, and on Arch there's a
+turnkey `scripts/build_arch_wayland.sh` that installs prerequisites, builds, and
+writes runtime setup notes.
 
-On Windows, run:
+## Automated releases (CI)
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows.ps1
+Two GitHub Actions workflows live in [`.github/workflows`](.github/workflows):
+
+- **`ci.yml`** — runs the full test suite on Windows, macOS, and Linux for every
+  push and pull request.
+- **`release.yml`** — on any pushed tag matching `v*`, builds all three binaries
+  in parallel and attaches them to a GitHub Release with auto-generated notes.
+
+Cutting a release is just:
+
+```bash
+git tag v0.1.6
+git push origin v0.1.6
 ```
 
-The build writes:
+No secrets are required — the workflow uses the built-in `GITHUB_TOKEN`. You can
+also run it manually from the **Actions** tab to produce downloadable artifacts
+without publishing.
 
-```text
-dist\tiny-macro-windows.exe
-dist\README-WINDOWS.txt
+<details>
+<summary>Optional: ship password-mode bundle encryption in CI builds</summary>
+
+The encryption module (`src/tinymacro/core/securepack.py`) is intentionally kept
+out of version control. The build specs bundle it only when present, so CI builds
+work fine without it — they simply omit password-mode bundle encryption. To
+include it in CI-built binaries, add a repository secret named `SECUREPACK_B64`
+containing the base64 of that file:
+
+```bash
+base64 -w0 src/tinymacro/core/securepack.py   # copy into the secret's value
 ```
 
-The Windows build uses native low-level keyboard/mouse hooks for global capture
-and hotkeys, and `SendInput` for playback. Normal desktop apps should work. To
-control elevated/admin apps, run Tiny Macro as administrator too. Some games,
-anti-cheat software, raw-input apps, or protected windows may block synthetic
-input.
+The release workflow restores it before building when the secret is set.
 
-## File Format
+</details>
 
-Macros are saved as structured `.tmacro` JSON files. They are not binary
-compatible with TinyTask `.rec` files.
+## Development
 
-## Safety
+```bash
+python -m pip install -e ".[dev]"
+python -m pytest           # full suite, incl. PyQt6 GUI smoke tests
+```
 
-Always test a macro once at normal speed before looping it. `Pause`, `Break`,
-and `ScrollLock` are reserved as emergency stop keys by default.
+No `pytest`? `python scripts/selfcheck.py` runs the non-GUI subset with only the
+standard library. On headless Linux, set `QT_QPA_PLATFORM=offscreen` for the GUI
+tests (CI does this automatically).
 
-Enable debug mode in Preferences when diagnosing playback or recording issues.
-In debug mode, Tiny Macro shows detailed error dialogs instead of only updating
-the status bar.
+## Scope & safety
 
-On Wayland, exact cursor anchoring depends on what the compositor exposes.
-Hyprland cursor position is detected through `hyprctl` when available. Other
-Wayland compositors may still replay relative movement accurately but cannot
-always reveal the initial global cursor position to normal apps.
+Tiny Macro is a desktop automation and QA/testing tool. Timing jitter exists to
+make test playback realistic — **not** to defeat anti-cheat, anti-bot, or DRM
+systems. Some games and protected/raw-input windows will block synthetic input
+by design.
+
+Always test a macro once at normal speed before looping it. `Pause`, `Break`, and
+`ScrollLock` are reserved as emergency-stop keys by default. Enable debug mode in
+Preferences for detailed error dialogs when diagnosing recording/playback.
+
+## License
+
+Released under the [MIT License](LICENSE).

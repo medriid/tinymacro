@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tiny-macro"
 version = "0.1.5"
-description = "A deterministic PyQt6 macro recorder for Linux and Windows desktops."
+description = "A deterministic PyQt6 macro recorder for Windows, macOS, and Linux desktops."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
@@ -14,6 +14,9 @@ dependencies = [
   "PyQt6>=6.7",
   "pynput>=1.7.6; platform_system == 'Linux'",
   "evdev>=1.7; platform_system == 'Linux'",
+  # macOS: pynput drives Quartz for capture/playback (needs the pyobjc bridge).
+  "pynput>=1.7.6; platform_system == 'Darwin'",
+  "pyobjc-framework-Quartz>=10; platform_system == 'Darwin'",
 ]
 
 [project.optional-dependencies]

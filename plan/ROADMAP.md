@@ -5,6 +5,20 @@ to build next, what to improve, and how to develop/build/release.
 
 ---
 
+## Unreleased (on `master` since v0.1.5)
+
+- **macOS backend** — `backends/macos.py` (`MacBackend`) drives capture/playback
+  through Quartz via `pynput`. Shared pynput logic now lives in
+  `backends/_pynput.py` (`PynputBackend`); X11 is a thin subclass. Factory
+  auto-selects it on `darwin`; needs Accessibility + Input Monitoring grants.
+- **Studio taskbar icon fix** — an explicit Windows AppUserModelID plus a
+  re-assert of the window icon on the native handle in `showEvent` (covers
+  Studio's maximized-first show, which previously dropped the taskbar icon).
+- **CI/CD** — `.github/workflows/ci.yml` runs the suite on Win/macOS/Linux;
+  `release.yml` builds all three binaries on a `v*` tag and attaches them to a
+  GitHub Release. Added `packaging/tiny-macro-macos.spec`; brought the Linux spec
+  up to parity (sounds/fonts/QtMultimedia). Added `LICENSE`; pro README rewrite.
+
 ## Current state (shipped in v0.1.5)
 
 - **Two UI variants** (both frameless, custom title bar/icons, animations):

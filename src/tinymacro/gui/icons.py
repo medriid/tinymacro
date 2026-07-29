@@ -22,6 +22,33 @@ from PyQt6.QtSvg import QSvgRenderer
 ICON_DIR = Path(__file__).resolve().parent / "icons"
 APP_SVG = ICON_DIR / "app" / "app.svg"
 
+# A stable Application User Model ID. Windows keys the taskbar button — its
+# grouping *and* which icon it shows — off this per-process id. Without an
+# explicit one, a Python/PyInstaller app inherits the host process' identity and
+# the taskbar shows the interpreter's icon instead of ours.
+APP_USER_MODEL_ID = "TinyMacro.TinyMacro.App"
+
+
+def set_app_user_model_id() -> None:
+    """Tell Windows this process is its own app so the taskbar uses our icon.
+
+    A no-op on every non-Windows platform. Safe to call once at startup before
+    any window is shown; failures are swallowed so a locked-down shell32 never
+    blocks launch.
+    """
+    import sys
+
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(  # type: ignore[attr-defined]
+            APP_USER_MODEL_ID
+        )
+    except Exception:  # pragma: no cover - defensive; never fatal at startup
+        pass
+
 # Each entry is a 24x24 solid-filled glyph. `{color}` is substituted per render.
 _ICONS: dict[str, str] = {
     # -- window chrome (frameless title bar) ----------------------------------

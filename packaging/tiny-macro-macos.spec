@@ -13,7 +13,6 @@ fonts_dir = gui_dir / "fonts"
 
 hiddenimports = (
     collect_submodules("pynput")
-    + collect_submodules("evdev")
     + [
         "PyQt6.QtCore",
         "PyQt6.QtGui",
@@ -21,8 +20,7 @@ hiddenimports = (
         "PyQt6.QtSvg",
         "PyQt6.QtMultimedia",
         "numpy",
-        "tinymacro.backends.evdev_wayland",
-        "tinymacro.backends.x11",
+        "tinymacro.backends.macos",
         "tinymacro.backends._pynput",
         "tinymacro.gui.app",
     ]
@@ -63,9 +61,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "unittest"],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
+    excludes=["tkinter", "unittest", "evdev"],
     cipher=block_cipher,
     noarchive=False,
 )
@@ -78,17 +74,17 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="tiny-macro-wayland",
+    name="tiny-macro-macos",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,  # UPX mangles macOS binaries; leave the Mach-O untouched
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
+    argv_emulation=True,  # let macOS "open with" / file-drop args reach argv
+    target_arch=None,     # build for the runner's arch (arm64 on macos-14)
     codesign_identity=None,
     entitlements_file=None,
 )

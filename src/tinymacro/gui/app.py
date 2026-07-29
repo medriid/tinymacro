@@ -11,7 +11,7 @@ from tinymacro.core.library import MacroLibrary
 from tinymacro.core.logging_setup import configure_logging
 from tinymacro.core.profiles import ProfileStore
 from tinymacro.core.scheduler import ScheduleStore
-from tinymacro.gui.icons import app_icon
+from tinymacro.gui.icons import app_icon, set_app_user_model_id
 from tinymacro.gui.main_window import MainWindow
 from tinymacro.gui.studio_window import StudioWindow
 from tinymacro.gui.sounds import ui_sounds
@@ -19,6 +19,7 @@ from tinymacro.gui.theme import apply_theme, load_bundled_fonts
 
 
 def run_app(initial_macro: Path | None = None, backend_name: str = "auto") -> int:
+    set_app_user_model_id()  # claim our own taskbar identity before any window (Windows)
     app = QApplication(sys.argv)
     app.setApplicationName("Tiny Macro")
     app.setWindowIcon(app_icon())

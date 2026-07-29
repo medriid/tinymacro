@@ -17,6 +17,8 @@ def create_backend(name: str = "auto") -> InputBackend:
     if name == "auto":
         if sys.platform == "win32":
             name = "windows"
+        elif sys.platform == "darwin":
+            name = "macos"
         else:
             session = detect_session()
             name = "wayland" if session == "wayland" else "x11"
@@ -24,6 +26,10 @@ def create_backend(name: str = "auto") -> InputBackend:
         from tinymacro.backends.windows import WindowsBackend
 
         return WindowsBackend()
+    if name in {"macos", "mac", "darwin", "cocoa"}:
+        from tinymacro.backends.macos import MacBackend
+
+        return MacBackend()
     if name in {"x11", "xorg"}:
         from tinymacro.backends.x11 import X11Backend
 

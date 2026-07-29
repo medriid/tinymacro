@@ -58,7 +58,7 @@ class PreferencesDialog(QDialog):
     def _build_general_tab(self) -> QWidget:
         s = self.settings
         self.backend = QComboBox()
-        self.backend.addItems(["auto", "x11", "wayland", "windows", "fake"])
+        self.backend.addItems(["auto", "x11", "wayland", "macos", "windows", "fake"])
         self.backend.setCurrentText(s.backend)
         self.always_on_top = QCheckBox()
         self.always_on_top.setChecked(s.always_on_top)
