@@ -5,7 +5,7 @@ to build next, what to improve, and how to develop/build/release.
 
 ---
 
-## Unreleased (on `master` since v0.1.5)
+## Shipped in v0.1.6
 
 - **macOS backend** — `backends/macos.py` (`MacBackend`) drives capture/playback
   through Quartz via `pynput`. Shared pynput logic now lives in
@@ -14,6 +14,13 @@ to build next, what to improve, and how to develop/build/release.
 - **Studio taskbar icon fix** — an explicit Windows AppUserModelID plus a
   re-assert of the window icon on the native handle in `showEvent` (covers
   Studio's maximized-first show, which previously dropped the taskbar icon).
+- **Open-source bundle encryption** — `core/securepack.py` is committed (was
+  gitignored). Password mode = Argon2id + AES-256-GCM (secure by Kerckhoffs,
+  keyed only by the password); "open" mode = obfuscation, not secrecy.
+  `cryptography` is now a core dependency; specs bundle it unconditionally.
+- **Cross-platform window docking (experimental)** — X11 via python-xlib/EWMH,
+  macOS via Quartz + the Accessibility API; both guarded/degrading. Wayland
+  can't support it by design. Windows remains the fully-tested path.
 - **CI/CD** — `.github/workflows/ci.yml` runs the suite on Win/macOS/Linux;
   `release.yml` builds all three binaries on a `v*` tag and attaches them to a
   GitHub Release. Added `packaging/tiny-macro-macos.spec`; brought the Linux spec
