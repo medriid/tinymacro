@@ -73,15 +73,15 @@ Say "Cleaning old Windows build output"
 if (Test-Path -LiteralPath "build") {
     Remove-WithRetry "build" -Recurse
 }
-if (Test-Path -LiteralPath "dist\tiny-macro-windows.exe") {
-    Remove-WithRetry "dist\tiny-macro-windows.exe"
+if (Test-Path -LiteralPath "dist\tiny-macro-windows") {
+    Remove-WithRetry "dist\tiny-macro-windows" -Recurse
 }
 New-Item -ItemType Directory -Force -Path "dist" | Out-Null
 
-Say "Building one-file Windows executable"
+Say "Building onedir Windows app"
 Invoke-Native $pyinstaller --clean --noconfirm "packaging\tiny-macro-windows.spec"
 
-$exe = Join-Path $root "dist\tiny-macro-windows.exe"
+$exe = Join-Path $root "dist\tiny-macro-windows\tiny-macro-windows.exe"
 if (-not (Test-Path -LiteralPath $exe)) {
     throw "PyInstaller finished but $exe was not created."
 }

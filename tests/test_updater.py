@@ -1,0 +1,140 @@
+"""Auto-updater logic: version comparison, release parsing, download, extract.
+
+Network and the swap/relaunch handoff are not exercised here (they need a real
+frozen build); everything testable off a live process is covered with fakes.
+"""
+from __future__ import annotations
+
+import io
+import json
+import zipfile
+
+import pytest
+
+from tinymacro.core import updater
+from tinymacro.core.updater import UpdateInfo, UpdaterError
+
+
+# -- version handling ---------------------------------------------------------
+@pytest.mark.parametrize(
+    "text,expected",
+    [("v0.1.7", (0, 1, 7)), ("0.1.10", (0, 1, 10)), ("v1.2.3-rc1", (1, 2, 3)), ("v2", (2,))],
+)
+def test_parse_version(text, expected):
+    assert updater.parse_version(text) == expected
+
+
+def test_is_newer():
+    assert updater.is_newer("v0.1.7", "0.1.6")
+    assert updater.is_newer("0.1.10", "0.1.9")   # numeric, not lexicographic
+    assert updater.is_newer("v1.0.0", "0.9.9")
+    assert not updater.is_newer("v0.1.6", "0.1.6")
+    assert not updater.is_newer("v0.1.5", "0.1.6")
+
+
+# -- asset selection ----------------------------------------------------------
+def test_asset_by_platform(monkeypatch):
+    monkeypatch.setattr(updater.sys, "platform", "win32")
+    assert updater.current_asset_name() == "tiny-macro-windows.zip"
+    monkeypatch.setattr(updater.sys, "platform", "darwin")
+    assert updater.current_asset_name() == "tiny-macro-macos.zip"
+    monkeypatch.setattr(updater.sys, "platform", "linux")
+    assert updater.current_asset_name() == "tiny-macro-linux.zip"
+    monkeypatch.setattr(updater.sys, "platform", "sunos")
+    assert updater.current_asset_name() is None
+
+
+# -- check_for_update ---------------------------------------------------------
+def _release_json(tag: str, asset: str = "tiny-macro-windows.zip", size: int = 123):
+    return json.dumps({
+        "tag_name": tag,
+        "body": "Release notes here.",
+        "assets": [
+            {"name": "other.txt", "browser_download_url": "https://x/other.txt", "size": 1},
+            {"name": asset, "browser_download_url": f"https://x/{asset}", "size": size},
+        ],
+    }).encode()
+
+
+def test_check_returns_update_when_newer():
+    info = updater.check_for_update(
+        "0.1.6", asset_name="tiny-macro-windows.zip",
+        fetch=lambda url: _release_json("v0.1.7"),
+    )
+    assert isinstance(info, UpdateInfo)
+    assert info.version == "0.1.7" and info.tag == "v0.1.7"
+    assert info.url == "https://x/tiny-macro-windows.zip"
+    assert info.size == 123 and info.notes == "Release notes here."
+
+
+def test_check_none_when_not_newer():
+    info = updater.check_for_update(
+        "0.1.7", asset_name="tiny-macro-windows.zip",
+        fetch=lambda url: _release_json("v0.1.7"),
+    )
+    assert info is None
+
+
+def test_check_none_when_asset_missing():
+    info = updater.check_for_update(
+        "0.1.6", asset_name="tiny-macro-linux.zip",
+        fetch=lambda url: _release_json("v0.1.7", asset="tiny-macro-windows.zip"),
+    )
+    assert info is None
+
+
+def test_check_raises_on_bad_json():
+    with pytest.raises(UpdaterError):
+        updater.check_for_update(
+            "0.1.6", asset_name="tiny-macro-windows.zip",
+            fetch=lambda url: b"not json",
+        )
+
+
+# -- download -----------------------------------------------------------------
+class _FakeResponse:
+    def __init__(self, data: bytes):
+        self._buf = io.BytesIO(data)
+        self.headers = {"Content-Length": str(len(data))}
+
+    def read(self, n): return self._buf.read(n)
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+
+def test_download_streams_with_progress(monkeypatch, tmp_path):
+    payload = b"x" * 1000
+    monkeypatch.setattr(updater, "_open", lambda url, timeout=30.0: _FakeResponse(payload))
+    seen: list[tuple[int, int]] = []
+    dest = updater.download("https://x/file.zip", tmp_path / "f.zip",
+                            progress=lambda d, t: seen.append((d, t)), chunk_size=256)
+    assert dest.read_bytes() == payload
+    assert seen[-1] == (1000, 1000)  # finishes at 100%
+
+
+def test_download_cancel_removes_partial(monkeypatch, tmp_path):
+    monkeypatch.setattr(updater, "_open", lambda url, timeout=30.0: _FakeResponse(b"y" * 1000))
+    dest = tmp_path / "f.zip"
+    with pytest.raises(UpdaterError):
+        updater.download("https://x/f.zip", dest, should_cancel=lambda: True, chunk_size=128)
+    assert not dest.exists()
+
+
+# -- extract ------------------------------------------------------------------
+def test_extract_returns_top_folder(tmp_path):
+    zip_path = tmp_path / "app.zip"
+    with zipfile.ZipFile(zip_path, "w") as z:
+        z.writestr("tiny-macro-windows/tiny-macro-windows.exe", b"MZ...")
+        z.writestr("tiny-macro-windows/_internal/base_library.zip", b"data")
+    out = updater.extract_zip(zip_path, tmp_path / "out")
+    assert out.name == "tiny-macro-windows"
+    assert (out / "tiny-macro-windows.exe").exists()
+    assert (out / "_internal" / "base_library.zip").exists()
+
+
+def test_extract_rejects_zip_slip(tmp_path):
+    zip_path = tmp_path / "bad.zip"
+    with zipfile.ZipFile(zip_path, "w") as z:
+        z.writestr("../outside.txt", b"nope")
+    with pytest.raises(UpdaterError):
+        updater.extract_zip(zip_path, tmp_path / "out")

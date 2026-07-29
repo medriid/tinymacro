@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 import sys
 
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from tinymacro.backends.factory import create_backend
@@ -76,4 +77,9 @@ def run_app(initial_macro: Path | None = None, backend_name: str = "auto") -> in
 
     state["window"] = build(settings.ui_variant, initial_macro)
     state["window"].show()  # type: ignore[union-attr]
+    if settings.check_updates_on_startup:
+        QTimer.singleShot(
+            1500,
+            lambda: getattr(state["window"], "check_for_updates")(silent=True),
+        )
     return app.exec()

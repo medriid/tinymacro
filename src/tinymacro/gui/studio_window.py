@@ -330,6 +330,7 @@ class StudioWindow(FramelessWindow):
         right.addWidget(self._row_button("logs", "Log Viewer", color, self.open_logs))
         right.addWidget(self._row_button("validate", "Validate", color, self.validate_macro))
         right.addWidget(self._row_button("add_file", "Export…", color, self.export_macro_runner))
+        right.addWidget(self._row_button("refresh", "Updates", color, self.check_for_updates))
         right.addStretch(1)
         right.addWidget(self._row_button("switch", "Switch to Classic UI", color, self._go_classic))
         right_wrap = QWidget()
@@ -888,6 +889,11 @@ class StudioWindow(FramelessWindow):
 
     def _retint(self, colors) -> None:
         self.colors = colors
+
+    def check_for_updates(self, checked: bool = False, *, silent: bool = False) -> None:
+        from tinymacro.gui.updater_dialog import show_update_dialog
+
+        show_update_dialog(self, silent=silent)
 
     def _go_classic(self) -> None:
         self.settings.ui_variant = "classic"

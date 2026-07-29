@@ -165,19 +165,20 @@ rm -rf build dist/tiny-macro-wayland dist/README-WAYLAND.txt "$PYTHONPYCACHEPREF
 mkdir -p dist
 mkdir -p "$PYTHONPYCACHEPREFIX" "$TMPDIR"
 
-run_step "Building one-file Wayland executable" pyinstaller --clean --noconfirm packaging/tiny-macro-wayland.spec
+run_step "Building onedir Wayland app" pyinstaller --clean --noconfirm packaging/tiny-macro-wayland.spec
 
-[[ -f dist/tiny-macro-wayland ]] || fail "PyInstaller finished but dist/tiny-macro-wayland was not created."
-chmod +x dist/tiny-macro-wayland
+[[ -f dist/tiny-macro-wayland/tiny-macro-wayland ]] || fail "PyInstaller finished but dist/tiny-macro-wayland/tiny-macro-wayland was not created."
+chmod +x dist/tiny-macro-wayland/tiny-macro-wayland
 
 say "Checking produced binary"
-file dist/tiny-macro-wayland || true
-ldd dist/tiny-macro-wayland >/dev/null 2>&1 || printf 'WARNING: ldd could not inspect the binary; it may still run as a PyInstaller executable.\n' >&2
+file dist/tiny-macro-wayland/tiny-macro-wayland || true
+ldd dist/tiny-macro-wayland/tiny-macro-wayland >/dev/null 2>&1 || printf 'WARNING: ldd could not inspect the binary; it may still run as a PyInstaller executable.\n' >&2
 
 cat > dist/README-WAYLAND.txt <<'EOF'
 Tiny Macro Wayland build
 
 Run:
+  cd tiny-macro-wayland
   ./tiny-macro-wayland --backend wayland
 
 If the GUI opens but recording/playback does not work, Wayland permissions are
@@ -207,6 +208,6 @@ EOF
 say "Build complete"
 printf 'Binary: %s/dist/tiny-macro-wayland\n' "$ROOT"
 printf 'Notes:  %s/dist/README-WAYLAND.txt\n' "$ROOT"
-printf '\nSend both files to your friend if they only need to run it:\n'
-printf '  dist/tiny-macro-wayland\n'
+printf '\nSend the app folder and notes to your friend if they only need to run it:\n'
+printf '  dist/tiny-macro-wayland/\n'
 printf '  dist/README-WAYLAND.txt\n'

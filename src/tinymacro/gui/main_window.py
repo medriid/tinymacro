@@ -402,10 +402,18 @@ class MainWindow(FramelessWindow):
         view_menu.addSeparator()
         self._menu_action(view_menu, "switch", "Switch to Studio UI", self._go_studio)
 
+        help_menu = self.menu_bar().addMenu("Help")
+        self._menu_action(help_menu, "refresh", "Check for Updates", self.check_for_updates)
+
     def _go_studio(self) -> None:
         self.settings.ui_variant = "studio"
         self._persist()
         self.switch_variant_requested.emit("studio")
+
+    def check_for_updates(self, checked: bool = False, *, silent: bool = False) -> None:
+        from tinymacro.gui.updater_dialog import show_update_dialog
+
+        show_update_dialog(self, silent=silent)
 
     def _build_tray(self) -> None:
         self.tray: QSystemTrayIcon | None = None

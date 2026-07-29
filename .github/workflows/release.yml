@@ -1,7 +1,7 @@
 name: Release
 
 # Build native binaries for Windows, macOS, and Linux and attach them to a
-# GitHub Release. Triggered by pushing a version tag (e.g. `v0.1.6`); can also be
+# GitHub Release. Triggered by pushing a version tag (e.g. `v0.1.7`); can also be
 # run manually from the Actions tab (which builds artifacts without publishing).
 
 on:
@@ -24,18 +24,18 @@ jobs:
           - os: windows-latest
             label: windows
             spec: packaging/tiny-macro-windows.spec
-            built: dist/tiny-macro-windows.exe
-            asset: dist/tiny-macro-windows.exe
+            dist_dir: tiny-macro-windows   # onedir folder under dist/
+            asset: tiny-macro-windows.zip
           - os: macos-14
             label: macos
             spec: packaging/tiny-macro-macos.spec
-            built: dist/tiny-macro-macos
-            asset: dist/tiny-macro-macos
+            dist_dir: tiny-macro-macos
+            asset: tiny-macro-macos.zip
           - os: ubuntu-latest
             label: linux
             spec: packaging/tiny-macro-wayland.spec
-            built: dist/tiny-macro-wayland
-            asset: dist/tiny-macro-linux
+            dist_dir: tiny-macro-wayland
+            asset: tiny-macro-linux.zip
 
     steps:
       - uses: actions/checkout@v4
@@ -61,26 +61,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[build,vision]"
 
-      - name: Build binary
+      - name: Build app (onedir)
         shell: bash
         run: pyinstaller --clean --noconfirm "${{ matrix.spec }}"
 
-      - name: Normalise artifact name
+      # Zip the onedir folder into a single release asset. On macOS/Linux `zip`
+      # preserves the executable bit so the app still runs after extraction; on
+      # Windows that bit is irrelevant, so PowerShell's Compress-Archive is fine.
+      - name: Package onedir as zip
         shell: bash
         run: |
-          if [ "${{ matrix.built }}" != "${{ matrix.asset }}" ]; then
-            mv "${{ matrix.built }}" "${{ matrix.asset }}"
-          fi
-          # macOS/Linux binaries must stay executable when downloaded.
-          if [ "${{ matrix.label }}" != "windows" ]; then
-            chmod +x "${{ matrix.asset }}"
+          cd dist
+          if [ "${{ matrix.label }}" = "windows" ]; then
+            powershell -Command "Compress-Archive -Path '${{ matrix.dist_dir }}' -DestinationPath '${{ matrix.asset }}' -Force"
+          else
+            zip -ry "${{ matrix.asset }}" "${{ matrix.dist_dir }}"
           fi
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: tiny-macro-${{ matrix.label }}
-          path: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
           if-no-files-found: error
 
       - name: Attach to release
@@ -92,4 +94,4 @@ jobs:
           draft: false
           generate_release_notes: true
           fail_on_unmatched_files: true
-          files: ${{ matrix.asset }}
+          files: dist/${{ matrix.asset }}

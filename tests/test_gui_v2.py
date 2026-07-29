@@ -14,6 +14,7 @@ from tinymacro.gui.library_dialog import LibraryDialog
 from tinymacro.gui.log_dialog import LogDialog
 from tinymacro.gui.preferences import PreferencesDialog
 from tinymacro.gui.scheduler_dialog import SchedulerDialog
+from tinymacro.gui.updater_dialog import UpdateDialog
 from tinymacro.gui.widgets import RecordingIndicator
 
 
@@ -61,6 +62,14 @@ def test_preferences_tabs_present(qtbot):
     dialog = PreferencesDialog(Settings())
     qtbot.addWidget(dialog)
     assert dialog.tabs.count() >= 5
+    assert dialog.check_updates_on_startup.isChecked()
+
+
+def test_update_dialog_initial_state(qtbot):
+    dialog = UpdateDialog()
+    qtbot.addWidget(dialog)
+    assert "Current version" in dialog.status.text()
+    assert not dialog.download_btn.isEnabled()
 
 
 def test_library_dialog_lists_entries(qtbot):

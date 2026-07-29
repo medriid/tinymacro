@@ -12,6 +12,7 @@ def test_new_fields_round_trip():
     s.compact_mode = False
     s.move_min_interval_ms = 8
     s.humanize_jitter_ms = 12
+    s.check_updates_on_startup = False
     s.notifications.generic.enabled = True
     s.notifications.generic.url = "https://example.com/hook"
     loaded = Settings.from_dict(s.to_dict())
@@ -19,6 +20,7 @@ def test_new_fields_round_trip():
     assert loaded.accent_color == "#3b82f6"
     assert loaded.compact_mode is False
     assert loaded.move_min_interval_ms == 8
+    assert loaded.check_updates_on_startup is False
     assert loaded.notifications.generic.url == "https://example.com/hook"
 
 

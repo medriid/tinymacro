@@ -5,6 +5,15 @@ to build next, what to improve, and how to develop/build/release.
 
 ---
 
+## Shipped in v0.1.7
+
+- **Fast startup packaging** — PyInstaller builds now use onedir output zipped
+  for releases, avoiding onefile's repeated per-launch extraction cost.
+- **Auto-updater** — packaged builds check GitHub Releases, download the matching
+  platform zip with progress UI, replace the app folder after exit, and relaunch.
+- **Lazy vision imports** — OpenCV, NumPy, and mss load only when image matching
+  or screen capture is actually used.
+
 ## Shipped in v0.1.6
 
 - **macOS backend** — `backends/macos.py` (`MacBackend`) drives capture/playback
@@ -331,8 +340,7 @@ act → observe, with a kill switch) as a stretch.
   sequence of Tiny Macro steps, **grounded** to on-screen targets from #1 (so
   "click Login" becomes a text-anchor click, not a guessed coordinate). Provider
   is configurable and **opt-in**: a **local model** (llama.cpp / Ollama) for
-  privacy, or a cloud API with a **user-supplied key**. Follow the
-  `docs/claude-api` guidance if wiring an Anthropic model.
+  privacy, or a cloud API with a **user-supplied key**.
 - *Review-before-run*: generated steps drop into the editor to inspect/tweak
   before playback — never auto-execute.
 - *Live agent (mode b)*: an act→observe loop with hard guardrails — explicit
@@ -405,28 +413,29 @@ mandatory, not optional).
 
 ---
 
-## Distribution: install manager + website (planned)
+## Distribution: installer + website (planned)
 
-Goal: users download Tiny Macro once, it **installs cleanly**, **auto-updates**
-itself, and **syncs macros** (and macro updates) from a website whenever they're
-online. Plus a public site where people browse/share macros per game.
+Goal: users download Tiny Macro once, it **installs cleanly** and **syncs
+macros** (and macro updates) from a website whenever they're online. Plus a
+public site where people browse/share macros per game.
 
 ### A. Installer (Windows first)
 
-- Build an **Inno Setup** (or NSIS) installer that wraps `tiny-macro-windows.exe`:
+- Build an **Inno Setup** (or NSIS) installer that wraps the `tiny-macro-windows`
+  onedir app:
   installs to `%LOCALAPPDATA%\TinyMacro` (per-user → self-update needs no admin),
   Start-Menu + desktop shortcuts, registers the `.tmacc`/`.tmacd` file
   associations and the `tinymacro://` URL protocol (see C).
-- Keep publishing the raw `.exe`/`wayland` binaries on GitHub Releases too.
+- Keep publishing the raw zipped app folders on GitHub Releases too.
 - Script it in `scripts/build_installer.iss` invoked after `build_windows.ps1`.
 - Later: **code-sign** the exe/installer (removes SmartScreen warnings). Needs a
   cert (~$100–300/yr) — note as a cost item.
 
 ### B. Auto-updater (self-update)
 
-- **Update source = GitHub Releases** to start (no server needed). On launch (and
-  hourly), the app calls the GitHub Releases API, compares the latest tag to its
-  own `__version__`, and if newer:
+- **Update source = GitHub Releases** to start (no server needed). On launch and
+  manual check, the app calls the GitHub Releases API, compares the latest tag to
+  its own `__version__`, and if newer:
   1. downloads the new binary to a temp file + verifies a SHA-256 from the
      release notes/asset;
   2. writes a tiny `updater` helper that waits for the app to exit, swaps the
@@ -644,18 +653,20 @@ py -3.14 -m venv .venv
 ## Building binaries
 
 - **Windows**: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows.ps1`
-  → `dist/tiny-macro-windows.exe` (rebuilds `.venv-windows-build`, regenerates the
+  → `dist/tiny-macro-windows/` (rebuilds `.venv-windows-build`, regenerates the
   multi-res app `.ico`, bundles icons + vision).
 - **Arch/Wayland** (run on Arch, or Arch WSL): `bash scripts/build_arch_wayland.sh`
-  → `dist/tiny-macro-wayland`. On WSL, build from the Linux filesystem (e.g.
+  → `dist/tiny-macro-wayland/`. On WSL, build from the Linux filesystem (e.g.
   `~/tiny-macro-build`), not `/mnt/c`, or PyInstaller/venv perms fail.
 
 ## Release flow
 
 1. Bump `version` in `pyproject.toml`.
-2. `pytest -q` green; rebuild both binaries.
-3. Commit (no AI co-author trailer — user preference), push.
-4. `git tag vX` ; `gh release create vX dist/tiny-macro-windows.exe dist/tiny-macro-wayland --title ... --notes ...`.
+2. Bump `src/tinymacro/__init__.py`.
+3. `pytest -q` green; rebuild the relevant local binary for smoke testing.
+4. Commit (no AI co-author trailer — user preference), push.
+5. `git tag vX` ; `git push origin vX`. The GitHub Actions release workflow
+   builds Windows/macOS/Linux zipped onedir assets and publishes the release.
 
 ## Architecture map
 

@@ -11,28 +11,50 @@ backend's mouse events.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib.util import find_spec
 
-try:  # pragma: no cover - trivial import guard
-    import cv2
-    import numpy as np
+# OpenCV + NumPy total ~250ms to import and are only needed once the user runs a
+# vision step. We detect availability cheaply with find_spec (which locates the
+# module without executing it) and defer the real import to first use, keeping
+# app startup fast. cv2/np/mss below are populated lazily by the _load_* helpers.
+cv2 = None  # type: ignore[assignment]
+np = None  # type: ignore[assignment]
+mss = None  # type: ignore[assignment]
 
-    _CV_AVAILABLE = True
-except Exception:  # noqa: BLE001 - any import failure means the feature is off
-    cv2 = None  # type: ignore[assignment]
-    np = None  # type: ignore[assignment]
-    _CV_AVAILABLE = False
 
-try:  # pragma: no cover - trivial import guard
-    import mss
+def _spec_ok(name: str) -> bool:
+    try:
+        return find_spec(name) is not None
+    except Exception:  # noqa: BLE001 - a broken/partial install counts as absent
+        return False
 
-    _MSS_AVAILABLE = True
-except Exception:  # noqa: BLE001
-    mss = None  # type: ignore[assignment]
-    _MSS_AVAILABLE = False
+
+_CV_AVAILABLE = _spec_ok("cv2") and _spec_ok("numpy")
+_MSS_AVAILABLE = _spec_ok("mss")
 
 # Matching (numpy/opencv) is enough for tests; capture additionally needs mss.
 VISION_AVAILABLE = _CV_AVAILABLE
 CAPTURE_AVAILABLE = _CV_AVAILABLE and _MSS_AVAILABLE
+
+
+def _load_cv() -> None:
+    """Import OpenCV + NumPy on first use, caching them in module globals."""
+    global cv2, np
+    if cv2 is None or np is None:
+        import cv2 as _cv2  # noqa: PLC0415
+        import numpy as _np  # noqa: PLC0415
+
+        cv2, np = _cv2, _np
+
+
+def _load_mss():
+    """Import mss on first use and return the module."""
+    global mss
+    if mss is None:
+        import mss as _mss  # noqa: PLC0415
+
+        mss = _mss
+    return mss
 
 # Region is (left, top, width, height) in absolute desktop pixels.
 Region = tuple[int, int, int, int]
@@ -53,6 +75,7 @@ def _require_cv() -> None:
             "Image matching needs the optional 'vision' extras. "
             "Install with: pip install \"tiny-macro[vision]\""
         )
+    _load_cv()  # import cv2/numpy now (first real use)
 
 
 def decode_png(png_bytes: bytes) -> "np.ndarray":
@@ -149,7 +172,8 @@ class Locator:
                 "Screen capture needs the optional 'vision' extras (opencv + mss). "
                 "Install with: pip install \"tiny-macro[vision]\""
             )
-        self._sct = mss.mss()
+        _load_cv()  # _grab uses numpy; capture encodes via cv2
+        self._sct = _load_mss().mss()
 
     def close(self) -> None:
         try:

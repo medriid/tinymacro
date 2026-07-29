@@ -38,6 +38,7 @@ class Settings:
     animations: bool = True
     ui_sounds: bool = True  # subtle hover/click feedback sounds
     tray_enabled: bool = True
+    check_updates_on_startup: bool = True
     ui_scale: float = 1.0  # font/scale multiplier for accessibility
     density: str = "comfortable"  # "comfortable" | "compact" control padding
     ui_variant: str = "classic"  # "classic" toolbar UI or "studio" docked UI
@@ -132,6 +133,7 @@ class Settings:
             "animations": self.animations,
             "ui_sounds": self.ui_sounds,
             "tray_enabled": self.tray_enabled,
+            "check_updates_on_startup": self.check_updates_on_startup,
             "ui_scale": self.ui_scale,
             "density": self.density,
             "ui_variant": self.ui_variant,
@@ -168,6 +170,7 @@ class Settings:
             animations=bool(data.get("animations", True)),
             ui_sounds=bool(data.get("ui_sounds", True)),
             tray_enabled=bool(data.get("tray_enabled", True)),
+            check_updates_on_startup=bool(data.get("check_updates_on_startup", True)),
             ui_scale=float(data.get("ui_scale", 1.0)),
             density=str(data.get("density", "comfortable")),
             ui_variant=str(data.get("ui_variant", "classic")),

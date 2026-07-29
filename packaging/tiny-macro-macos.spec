@@ -63,24 +63,34 @@ a = Analysis(
 )
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# onedir build (no per-launch extraction) — the exe runs from its folder, kept
+# uniform with the Windows/Linux specs so the auto-updater's folder-swap logic is
+# identical on every platform.
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="tiny-macro-macos",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,  # UPX mangles macOS binaries; leave the Mach-O untouched
     upx_exclude=[],
-    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=True,  # let macOS "open with" / file-drop args reach argv
     target_arch=None,     # build for the runner's arch (arm64 on macos-14)
     codesign_identity=None,
     entitlements_file=None,
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="tiny-macro-macos",
 )

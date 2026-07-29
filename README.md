@@ -76,20 +76,21 @@ See [Permissions](#permissions) for the macOS and Linux one-time setup.
 
 ## Download
 
-Grab a prebuilt binary from the [**latest release**](https://github.com/medriid/tinymacro/releases/latest):
+Grab a prebuilt zip from the [**latest release**](https://github.com/medriid/tinymacro/releases/latest), extract it once, then run the app from the extracted folder:
 
 | OS | File | Run it |
 |---|---|---|
-| Windows | `tiny-macro-windows.exe` | double-click |
-| macOS | `tiny-macro-macos` | `chmod +x tiny-macro-macos && ./tiny-macro-macos` |
-| Linux | `tiny-macro-linux` | `chmod +x tiny-macro-linux && ./tiny-macro-linux` |
+| Windows | `tiny-macro-windows.zip` | open `tiny-macro-windows/tiny-macro-windows.exe` |
+| macOS | `tiny-macro-macos.zip` | `cd tiny-macro-macos && ./tiny-macro-macos` |
+| Linux | `tiny-macro-linux.zip` | `cd tiny-macro-wayland && ./tiny-macro-wayland` |
 
 > **macOS Gatekeeper:** the binary is unsigned, so the first launch needs
 > right-click → **Open** (or *System Settings → Privacy & Security → Open
 > Anyway*). Then grant the permissions below.
 
-The binaries bundle the optional image-matching stack, so no extra install is
-needed for the vision features.
+The packaged app uses PyInstaller's onedir layout so it does not unpack a large
+bundle to temp every time it starts. The zips also carry the optional
+image-matching stack, so no extra install is needed for the vision features.
 
 ## Install from source
 
@@ -211,8 +212,9 @@ root. X11 needs no special permissions.
 
 ## Building your own binaries
 
-Each platform builds a single self-contained executable with
-[PyInstaller](https://pyinstaller.org/):
+Each platform builds a self-contained onedir app folder with
+[PyInstaller](https://pyinstaller.org/). Release builds zip that folder into one
+downloadable asset:
 
 ```bash
 python -m pip install -e ".[build,vision]"
@@ -220,7 +222,7 @@ python -m pip install -e ".[build,vision]"
 
 | OS | Command | Output |
 |---|---|---|
-| Windows | `pyinstaller --clean --noconfirm packaging/tiny-macro-windows.spec` | `dist/tiny-macro-windows.exe` |
+| Windows | `pyinstaller --clean --noconfirm packaging/tiny-macro-windows.spec` | `dist/tiny-macro-windows/` |
 | macOS | `pyinstaller --clean --noconfirm packaging/tiny-macro-macos.spec` | `dist/tiny-macro-macos` |
 | Linux | `pyinstaller --clean --noconfirm packaging/tiny-macro-wayland.spec` | `dist/tiny-macro-wayland` |
 
@@ -234,14 +236,15 @@ Two GitHub Actions workflows live in [`.github/workflows`](.github/workflows):
 
 - **`ci.yml`** — runs the full test suite on Windows, macOS, and Linux for every
   push and pull request.
-- **`release.yml`** — on any pushed tag matching `v*`, builds all three binaries
-  in parallel and attaches them to a GitHub Release with auto-generated notes.
+- **`release.yml`** — on any pushed tag matching `v*`, builds all three app
+  folders in parallel, zips them, and attaches the zip assets to a GitHub Release
+  with auto-generated notes.
 
 Cutting a release is just:
 
 ```bash
-git tag v0.1.6
-git push origin v0.1.6
+git tag v0.1.7
+git push origin v0.1.7
 ```
 
 No secrets are required — the workflow uses the built-in `GITHUB_TOKEN`. You can
