@@ -12,11 +12,15 @@ license = { text = "MIT" }
 authors = [{ name = "Tiny Macro Contributors" }]
 dependencies = [
   "PyQt6>=6.7",
+  # Authenticated encryption for portable .tmbundle files (Argon2id + AES-256-GCM).
+  "cryptography>=44",
   "pynput>=1.7.6; platform_system == 'Linux'",
   "evdev>=1.7; platform_system == 'Linux'",
-  # macOS: pynput drives Quartz for capture/playback (needs the pyobjc bridge).
+  # macOS: pynput drives Quartz for capture/playback; Quartz + ApplicationServices
+  # (the Accessibility API) back window docking. All via the pyobjc bridge.
   "pynput>=1.7.6; platform_system == 'Darwin'",
   "pyobjc-framework-Quartz>=10; platform_system == 'Darwin'",
+  "pyobjc-framework-ApplicationServices>=10; platform_system == 'Darwin'",
 ]
 
 [project.optional-dependencies]

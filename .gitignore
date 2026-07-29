@@ -11,6 +11,3 @@ __pycache__/
 build/
 dist/
 *.egg-info/
-
-# Proprietary bundle-encryption module (ships in official builds only)
-src/tinymacro/core/securepack.py

@@ -444,7 +444,10 @@ class StudioWindow(FramelessWindow):
         if not self.backend.supports_docking():
             QMessageBox.information(
                 self, "Not supported",
-                "Window docking isn't available on this backend (Windows only).",
+                "Window docking isn't available on this backend.\n\n"
+                "It works on Windows, macOS (grant Accessibility permission), and "
+                "Linux/X11. Wayland forbids apps from moving other windows, so "
+                "docking can't be supported there.",
             )
             return
         picker = WindowPicker(self.backend, self)

@@ -61,21 +61,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[build,vision]"
 
-      # Optional: rebuild the gitignored encryption module from a repo secret so
-      # CI binaries can ship password-mode bundle encryption. Without the secret
-      # the build simply proceeds and the encryption seam degrades gracefully.
-      - name: Restore build-only encryption module (optional)
-        shell: bash
-        env:
-          SECUREPACK_B64: ${{ secrets.SECUREPACK_B64 }}
-        run: |
-          if [ -n "$SECUREPACK_B64" ]; then
-            echo "$SECUREPACK_B64" | base64 -d > src/tinymacro/core/securepack.py
-            echo "Restored securepack.py from secret."
-          else
-            echo "No SECUREPACK_B64 secret set; building without the encryption module."
-          fi
-
       - name: Build binary
         shell: bash
         run: pyinstaller --clean --noconfirm "${{ matrix.spec }}"

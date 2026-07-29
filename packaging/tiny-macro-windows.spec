@@ -37,11 +37,11 @@ for _pkg in ("cv2", "mss"):
     binaries += _b
     hiddenimports += _h
 
-# Bundle the optional (build-only, gitignored) encryption module and its crypto
-# backend — only when present, so a fresh clone without it still builds.
-if (project_root / "src" / "tinymacro" / "core" / "securepack.py").exists():
-    hiddenimports.append("tinymacro.core.securepack")
-    _d, _b, _h = collect_all("cryptography")
+# Bundle the (now open-source) encryption module and its crypto backend so
+# .tmbundle password protection works in the packaged app.
+hiddenimports.append("tinymacro.core.securepack")
+for _pkg in ("cryptography",):
+    _d, _b, _h = collect_all(_pkg)
     datas += _d
     binaries += _b
     hiddenimports += _h

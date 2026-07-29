@@ -33,24 +33,20 @@ for _src, _dest in ((sounds_dir, "tinymacro/gui/sounds"), (fonts_dir, "tinymacro
         datas.append((str(_src), _dest))
 binaries = []
 
-# Bundle the optional vision stack (click-image + image-trigger scheduler).
-for _pkg in ("cv2", "mss"):
+# Bundle the vision stack (click-image + image-trigger scheduler), the pyobjc
+# frameworks that back input + window docking (ApplicationServices carries the
+# Accessibility API, which macos.py imports dynamically so PyInstaller can't see
+# it), and the bundle-encryption crypto backend. Each is wrapped so a build env
+# missing an optional one still succeeds.
+hiddenimports.append("tinymacro.core.securepack")
+for _pkg in ("cv2", "mss", "Quartz", "AppKit", "ApplicationServices", "cryptography"):
     try:
         _d, _b, _h = collect_all(_pkg)
         datas += _d
         binaries += _b
         hiddenimports += _h
     except Exception:
-        pass  # vision extras are optional; skip if not installed in the build env
-
-# Bundle the optional (build-only, gitignored) encryption module and its crypto
-# backend — only when present, so a fresh clone / CI checkout still builds.
-if (project_root / "src" / "tinymacro" / "core" / "securepack.py").exists():
-    hiddenimports.append("tinymacro.core.securepack")
-    _d, _b, _h = collect_all("cryptography")
-    datas += _d
-    binaries += _b
-    hiddenimports += _h
+        pass  # optional in some build envs; skip if absent
 
 a = Analysis(
     [str(project_root / "src" / "tinymacro" / "cli.py")],

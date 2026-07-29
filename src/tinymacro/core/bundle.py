@@ -5,11 +5,12 @@ macro it references** (and their embedded gate images) into a single file that
 works on any machine and any OS — the playlist's file-path references are rewritten
 to in-bundle keys, so nothing points at the author's local disk.
 
-Bundles are gzip-compressed JSON. They can optionally be **encrypted**: password
-protected or "open" (no password, but not plaintext). The encryption itself lives
-in an optional :mod:`tinymacro.core.securepack` module that ships in official
-builds but is not part of the public source tree; when it's absent, bundles are
-written/read as plaintext and the encryption options are simply unavailable.
+Bundles are gzip-compressed JSON. They can optionally be **encrypted** by the
+open-source :mod:`tinymacro.core.securepack` module: password-protected (real
+AES-256-GCM secrecy keyed by an Argon2id-stretched password) or "open" (no
+password — obfuscation/tamper-evidence only, never confidential). Encryption
+needs the ``cryptography`` package; on the rare install without it, bundles fall
+back to plaintext and the encryption options are simply unavailable.
 """
 from __future__ import annotations
 

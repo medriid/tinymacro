@@ -30,6 +30,7 @@ encrypted bundles.
 - [Macro formats](#macro-formats)
 - [Building your own binaries](#building-your-own-binaries)
 - [Automated releases (CI)](#automated-releases-ci)
+- [Bundle encryption](#bundle-encryption)
 - [Development](#development)
 - [Scope & safety](#scope--safety)
 - [License](#license)
@@ -59,13 +60,19 @@ Switch between them any time from the View menu (Classic) or the side panel
 | Record & replay | ✅ | ✅ | ✅ | ✅ |
 | Global hotkeys | ✅ | ✅ | ✅ | ✅ |
 | Text-type step | ✅ | ✅ | ✅ | ✅ |
-| Window docking (Studio) | ✅ | — | — | — |
+| Window docking (Studio) | ✅ | 🧪 | 🧪 | ✕ |
 | Image steps / triggers (`vision`) | ✅ | ✅ | ✅ | ⚠️ degrades |
 | Backend | native hooks + `SendInput` | Quartz via `pynput` | `pynput` | `evdev` / `uinput` |
 | Extra setup | run as admin for elevated apps | grant Accessibility + Input Monitoring | — | `input` group + udev rule |
 
-✅ supported · ⚠️ partial · — not available. See [Permissions](#permissions)
-for the macOS and Linux one-time setup.
+✅ supported · 🧪 experimental · ⚠️ partial · — not available · ✕ impossible.
+See [Permissions](#permissions) for the macOS and Linux one-time setup.
+
+> **On window docking:** full and battle-tested on Windows. macOS (via the
+> Accessibility API) and Linux/X11 (via EWMH) are **experimental** — they move
+> the whole window frame and depend on a cooperative window manager. Wayland
+> deliberately forbids apps from positioning other windows, so docking cannot be
+> supported there by design (input capture still works via the evdev backend).
 
 ## Download
 
@@ -241,22 +248,24 @@ No secrets are required — the workflow uses the built-in `GITHUB_TOKEN`. You c
 also run it manually from the **Actions** tab to produce downloadable artifacts
 without publishing.
 
-<details>
-<summary>Optional: ship password-mode bundle encryption in CI builds</summary>
+## Bundle encryption
 
-The encryption module (`src/tinymacro/core/securepack.py`) is intentionally kept
-out of version control. The build specs bundle it only when present, so CI builds
-work fine without it — they simply omit password-mode bundle encryption. To
-include it in CI-built binaries, add a repository secret named `SECUREPACK_B64`
-containing the base64 of that file:
+Portable `.tmbundle` files can be encrypted, and the encryption
+([`securepack.py`](src/tinymacro/core/securepack.py)) is fully open source — its
+security follows [Kerckhoffs's principle](https://en.wikipedia.org/wiki/Kerckhoffs%27s_principle):
+everything is public except your password.
 
-```bash
-base64 -w0 src/tinymacro/core/securepack.py   # copy into the secret's value
-```
+- **Password-protected bundles** — real confidentiality. The key is stretched
+  from your password with **Argon2id** (memory-hard) and the payload sealed with
+  **AES-256-GCM**. A shared bundle is safe even against someone holding this
+  entire repository: the only way in is to guess the password, which Argon2id
+  makes very expensive. Use a strong password and share it out-of-band.
+- **"Open" (no-password) bundles** — **obfuscation and tamper-evidence only, not
+  confidentiality.** The key comes from a public constant, so anyone with the app
+  can open them. If a shared bundle must stay private, give it a password.
 
-The release workflow restores it before building when the secret is set.
-
-</details>
+Publishing the algorithm does not weaken the strong mode — that is the whole
+point of well-designed cryptography.
 
 ## Development
 
