@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tiny-macro"
-version = "1.8.1"
+version = "1.8.2"
 description = "A deterministic PyQt6 macro recorder for Windows, macOS, and Linux desktops."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -15,6 +15,10 @@ dependencies = [
   # Authenticated encryption for portable .tmbundle files (Argon2id + AES-256-GCM).
   "cryptography>=44",
   "pynput>=1.7.6; platform_system == 'Linux'",
+  # pynput's Xorg backend and the X11 window-docking code both import python-xlib;
+  # declare it explicitly so it's present at runtime and in the PyInstaller build
+  # env (otherwise pynput.keyboard._xorg gets dropped from the frozen Linux app).
+  "python-xlib>=0.31; platform_system == 'Linux'",
   "evdev>=1.7; platform_system == 'Linux'",
   # macOS: pynput drives Quartz for capture/playback; Quartz + ApplicationServices
   # (the Accessibility API) back window docking. All via the pyobjc bridge.

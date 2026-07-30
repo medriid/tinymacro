@@ -14,6 +14,7 @@ fonts_dir = gui_dir / "fonts"
 hiddenimports = (
     collect_submodules("pynput")
     + collect_submodules("evdev")
+    + collect_submodules("Xlib")
     + [
         "PyQt6.QtCore",
         "PyQt6.QtGui",
@@ -25,6 +26,15 @@ hiddenimports = (
         "tinymacro.backends.x11",
         "tinymacro.backends._pynput",
         "tinymacro.gui.app",
+        # pynput chooses its Linux backend at runtime via importlib, so PyInstaller
+        # can't see it statically and collect_submodules misses it too. Force the
+        # Xorg + uinput backends and their xorg util in explicitly — without this
+        # the frozen app dies with "No module named 'pynput.keyboard._xorg'" on X11.
+        "pynput.keyboard._xorg",
+        "pynput.mouse._xorg",
+        "pynput.keyboard._uinput",
+        "pynput._util.xorg",
+        "pynput._util.xorg_keysyms",
     ]
 )
 

@@ -5,6 +5,14 @@ to build next, what to improve, and how to develop/build/release.
 
 ---
 
+## Shipped in v1.8.2
+
+- **Linux binary crashed on X11 with "No module named 'pynput.keyboard._xorg'"** —
+  pynput loads its backend dynamically, so PyInstaller didn't bundle the Xorg
+  backend, and without python-xlib in the build env it got dropped entirely.
+  Fixed by declaring `python-xlib` a real Linux dependency and force-listing the
+  pynput Xorg/uinput backends (and their xorg util) as hidden imports in the spec.
+
 ## Shipped in v1.8.1
 
 - **Update check no longer hits the GitHub API rate limit** — the "check for
