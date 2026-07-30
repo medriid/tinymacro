@@ -5,6 +5,15 @@ to build next, what to improve, and how to develop/build/release.
 
 ---
 
+## Shipped in v1.8.3
+
+- **Self-contained Linux zip — no more "Could not load the Qt platform plugin
+  'xcb'"** — Qt 6.5+ `dlopen()`s `libxcb-cursor.so.0` (and friends) lazily, so
+  PyInstaller's auto-scan didn't bundle them and the app crashed on launch on any
+  host without those system libs. The Linux spec now explicitly copies the xcb
+  platform-plugin runtime libs from the build host into `_internal/`, so end users
+  need nothing preinstalled. (CI already apt-installs the `libxcb-*` packages.)
+
 ## Shipped in v1.8.2
 
 - **Linux binary crashed on X11 with "No module named 'pynput.keyboard._xorg'"** —

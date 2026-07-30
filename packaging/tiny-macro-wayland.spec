@@ -45,6 +45,35 @@ for _src, _dest in ((sounds_dir, "tinymacro/gui/sounds"), (fonts_dir, "tinymacro
         datas.append((str(_src), _dest))
 binaries = []
 
+# Bundle the Qt "xcb" platform-plugin runtime libs. Qt dlopen()s
+# libxcb-cursor lazily, so PyInstaller's auto-scan misses it and the frozen
+# app aborts with "Could not load the Qt platform plugin 'xcb'". Bundle them
+# explicitly so the release zip is self-contained. Missing libs are skipped.
+import glob as _glob
+_xcb_runtime_libs = [
+    "libxcb-cursor.so.0",
+    "libxcb-icccm.so.4",
+    "libxcb-image.so.0",
+    "libxcb-keysyms.so.1",
+    "libxcb-randr.so.0",
+    "libxcb-render-util.so.0",
+    "libxcb-shape.so.0",
+    "libxcb-xinerama.so.0",
+]
+_lib_search_dirs = [
+    "/usr/lib/x86_64-linux-gnu",
+    "/usr/lib64",
+    "/usr/lib",
+    "/lib/x86_64-linux-gnu",
+    "/lib",
+]
+for _libname in _xcb_runtime_libs:
+    for _d in _lib_search_dirs:
+        _matches = _glob.glob(str(Path(_d) / _libname))
+        if _matches:
+            binaries.append((_matches[0], "."))
+            break
+
 # Bundle the vision stack (click-image + image-trigger scheduler), python-xlib
 # (X11 window docking talks EWMH through it), and the bundle-encryption crypto
 # backend. Each is wrapped so a build env missing an optional one still succeeds.
