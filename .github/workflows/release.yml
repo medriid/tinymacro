@@ -34,7 +34,7 @@ jobs:
           - os: ubuntu-latest
             label: linux
             spec: packaging/tiny-macro-wayland.spec
-            dist_dir: tiny-macro-wayland
+            dist_dir: tiny-macro-linux
             asset: tiny-macro-linux.zip
 
     steps:
@@ -64,6 +64,50 @@ jobs:
       - name: Build app (onedir)
         shell: bash
         run: pyinstaller --clean --noconfirm "${{ matrix.spec }}"
+
+      # Ship a plain-text quickstart and an empty macros/ folder inside every zip
+      # so users have somewhere obvious to keep their macros and know how to run.
+      - name: Add instructions + macros folder
+        shell: bash
+        run: |
+          APP="dist/${{ matrix.dist_dir }}"
+          mkdir -p "$APP/macros"
+          cat > "$APP/macros/PUT-YOUR-MACROS-HERE.txt" <<'EOF'
+          Keep your Tiny Macro files here so they travel with the app:
+            .tmacro / .tmacc  - Classic macros
+            .tmacd            - Studio (docked) macros
+            .tmplist          - playlists
+            .tmbundle         - portable, optionally-encrypted playlist bundles
+
+          Open them from inside Tiny Macro via Open or the Library. This folder is
+          just a convenient home for them - the app can load macros from anywhere.
+          EOF
+          case "${{ matrix.label }}" in
+            windows) RUN="Double-click tiny-macro-windows.exe.";;
+            macos)   RUN="Run ./tiny-macro-macos (first launch: right-click > Open). Grant Accessibility + Input Monitoring in System Settings > Privacy & Security.";;
+            linux)   RUN="Run ./tiny-macro-linux  (chmod +x it first if needed).";;
+          esac
+          cat > "$APP/README.txt" <<EOF
+          Tiny Macro ${{ github.ref_name }}
+          =================================
+
+          A deterministic macro recorder for Windows, macOS, and Linux.
+
+          RUNNING
+            $RUN
+            Keep the executable together with the _internal folder next to it -
+            they are one app. Move or shortcut the whole folder, not just the exe.
+
+          YOUR MACROS
+            Save them in the macros/ folder in here (see the note inside it).
+
+          UPDATING
+            Tiny Macro can update itself: it checks GitHub for new releases and,
+            when you accept, downloads and swaps this folder in place, then relaunches.
+
+          PROJECT
+            https://github.com/medriid/tinymacro
+          EOF
 
       # Zip the onedir folder into a single release asset. On macOS/Linux `zip`
       # preserves the executable bit so the app still runs after extraction; on

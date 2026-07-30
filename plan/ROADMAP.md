@@ -5,6 +5,21 @@ to build next, what to improve, and how to develop/build/release.
 
 ---
 
+## Shipped in v0.1.8
+
+- **Linux fixes** — clearer backend error (surfaces the real pynput/display cause
+  plus how to fix it), Wayland auto-detected via `WAYLAND_DISPLAY`, and the Linux
+  build/zip is now named `tiny-macro-linux` (was `tiny-macro-wayland`); the spec
+  bundles python-xlib so the frozen app can talk EWMH.
+- **Release zips carry a README.txt and a macros/ folder** for users to drop their
+  macros into.
+- **Playlist/flow-builder lag fixed** — the per-event progress/step callbacks were
+  emitting a cross-thread Qt signal for *every* event, flooding the GUI on dense or
+  high-loop playlists. They're now coalesced to ~30 Hz, and the step signal is
+  skipped entirely unless the editor playhead is live (both UIs).
+- **Studio play focuses the docked window first** — playback now waits a beat after
+  the focus request so the first key/click actually lands in the docked window.
+
 ## Shipped in v0.1.7
 
 - **Fast startup packaging** — PyInstaller builds now use onedir output zipped

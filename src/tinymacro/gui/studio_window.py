@@ -9,6 +9,7 @@ distributed as a ``.tmacd`` file.
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 from PyQt6.QtCore import QObject, QPoint, QRect, QSize, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QRegion
@@ -59,6 +60,10 @@ from tinymacro.gui.toast import ToastManager
 from tinymacro.gui.window_picker import WindowPicker
 
 _DOCK_FILTER = f"Studio Macro (*{DOCK_EXTENSION})"
+
+# How long to wait after requesting focus on the docked window before firing the
+# first playback event, so the OS has actually brought it to the foreground.
+_FOCUS_SETTLE_MS = 150
 
 
 class _Bridge(QObject):
@@ -204,9 +209,16 @@ class StudioWindow(FramelessWindow):
         self.player.on_loop_complete = (
             lambda done, total, spd, macro, shot: self.bridge.loop_completed.emit(done, total, shot)
         )
-        self.player.on_progress = lambda i, t: self.bridge.progress.emit(i, t)
+        # on_progress/on_step fire once per event on the player thread. A dense or
+        # high-loop playlist can emit thousands per second; forwarding each as a
+        # queued cross-thread signal floods the GUI event loop and makes the whole
+        # app lag. So we coalesce them to ~30 Hz and skip the step signal entirely
+        # unless the editor playhead is actually live.
+        self._last_progress_ns = 0
+        self._last_step_ns = 0
+        self.player.on_progress = self._emit_progress
         self.player.on_error = lambda exc: self.bridge.error.emit(str(exc))
-        self.player.on_step = lambda i: self.bridge.step_reached.emit(i)
+        self.player.on_step = self._emit_step
         self.player.on_breakpoint = lambda i: self.bridge.breakpoint_hit.emit(i)
         # Non-modal editor + whether the live playhead applies to the current run.
         self._editor: EditorDialog | None = None
@@ -515,12 +527,10 @@ class StudioWindow(FramelessWindow):
         if not self.macro.events:
             QMessageBox.information(self, "No macro", "Record or open a macro first.")
             return
-        if self._target_hwnd is not None:
-            self.backend.focus_window(self._target_hwnd)
         self.settings.loop_count = self.loop_spin.value()
         self.settings.speed = self.speed_spin.value()
         self._prepare_playhead(True)  # a plain Play drives the editor playhead
-        self.player.start(self.macro, loop_count=self.loop_spin.value(), speed=self.speed_spin.value())
+        self._focus_then_start(self.macro)  # focus the docked window, then play
         self.logs.addItem(f"▶ Playback started ×{self.loop_spin.value() or '∞'}")
         self._update_state()
 
@@ -624,14 +634,8 @@ class StudioWindow(FramelessWindow):
         if not macro.events:
             QMessageBox.information(self, "Empty", "That playlist produced no events.")
             return
-        if self._target_hwnd is not None:
-            self.backend.focus_window(self._target_hwnd)
         self._prepare_playhead(False)  # a stitched playlist isn't the editor's macro
-        try:
-            self.player.start(macro, loop_count=self.loop_spin.value(), speed=self.speed_spin.value())
-        except Exception as exc:  # noqa: BLE001
-            self._toast(str(exc), "error")
-            return
+        self._focus_then_start(macro)  # focus the docked window, then play
         self.logs.addItem(f"▶ Playlist started ({len(macro.events)} events)")
         self._update_state()
 
@@ -837,6 +841,51 @@ class StudioWindow(FramelessWindow):
 
     def _on_progress(self, index: int, total: int) -> None:
         pass  # reserved for a progress bar
+
+    # ~30 Hz cap on player-thread → GUI signals so dense playback can't flood the
+    # event loop. The final event always gets through so any UI settles correctly.
+    _SIGNAL_MIN_INTERVAL_NS = 33_000_000
+
+    def _emit_progress(self, index: int, total: int) -> None:
+        now = time.monotonic_ns()
+        if index >= total or (now - self._last_progress_ns) >= self._SIGNAL_MIN_INTERVAL_NS:
+            self._last_progress_ns = now
+            self.bridge.progress.emit(index, total)
+
+    def _emit_step(self, index: int) -> None:
+        # The step signal only drives the editor's live highlight; if the playhead
+        # isn't active (e.g. a playlist run with the editor closed) don't emit at
+        # all — that's the flood that made high-loop playlists lag.
+        if not self._playhead_active:
+            return
+        now = time.monotonic_ns()
+        if (now - self._last_step_ns) >= self._SIGNAL_MIN_INTERVAL_NS:
+            self._last_step_ns = now
+            self.bridge.step_reached.emit(index)
+
+    def _focus_then_start(self, macro: Macro) -> None:
+        """Give the docked window keyboard focus, then start playback.
+
+        Playback is deferred a beat after the focus request so the target window
+        is actually frontmost before the first key/click lands in it (Windows'
+        SetForegroundWindow doesn't take effect synchronously).
+        """
+        if self._target_hwnd is not None:
+            try:
+                self.backend.focus_window(self._target_hwnd)
+            except Exception:  # noqa: BLE001 - focus is best-effort
+                pass
+            QTimer.singleShot(_FOCUS_SETTLE_MS, lambda: self._do_start(macro))
+        else:
+            self._do_start(macro)
+
+    def _do_start(self, macro: Macro) -> None:
+        try:
+            self.player.start(macro, loop_count=self.loop_spin.value(), speed=self.speed_spin.value())
+        except Exception as exc:  # noqa: BLE001
+            self._toast(str(exc), "error")
+            return
+        self._update_state()
 
     # -- misc -----------------------------------------------------------------
     def _toast(self, text: str, level: str = "info") -> None:

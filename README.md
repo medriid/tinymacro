@@ -82,7 +82,7 @@ Grab a prebuilt zip from the [**latest release**](https://github.com/medriid/tin
 |---|---|---|
 | Windows | `tiny-macro-windows.zip` | open `tiny-macro-windows/tiny-macro-windows.exe` |
 | macOS | `tiny-macro-macos.zip` | `cd tiny-macro-macos && ./tiny-macro-macos` |
-| Linux | `tiny-macro-linux.zip` | `cd tiny-macro-wayland && ./tiny-macro-wayland` |
+| Linux | `tiny-macro-linux.zip` | `cd tiny-macro-linux && ./tiny-macro-linux` |
 
 > **macOS Gatekeeper:** the binary is unsigned, so the first launch needs
 > right-click → **Open** (or *System Settings → Privacy & Security → Open

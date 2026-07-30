@@ -71,7 +71,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="tiny-macro-wayland",
+    name="tiny-macro-linux",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -92,5 +92,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="tiny-macro-wayland",
+    name="tiny-macro-linux",
 )

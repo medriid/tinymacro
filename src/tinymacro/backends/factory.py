@@ -8,6 +8,10 @@ from tinymacro.backends.fake import FakeBackend
 
 
 def detect_session() -> str:
+    # WAYLAND_DISPLAY is the most reliable signal — some launchers leave
+    # XDG_SESSION_TYPE unset even under Wayland, which would misroute us to x11.
+    if os.environ.get("WAYLAND_DISPLAY"):
+        return "wayland"
     return os.environ.get("XDG_SESSION_TYPE", "").lower()
 
 

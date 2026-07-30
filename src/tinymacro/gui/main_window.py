@@ -132,8 +132,13 @@ class MainWindow(FramelessWindow):
         self.bridge.breakpoint_hit.connect(self._on_breakpoint_hit)
         self.player.on_loop_complete = self._emit_loop_completed
         self.player.on_error = self._emit_playback_error
-        self.player.on_progress = lambda i, t: self.bridge.progress.emit(i, t)
-        self.player.on_step = lambda i: self.bridge.step_reached.emit(i)
+        # Coalesce the per-event progress/step signals to ~30 Hz (and drop the step
+        # signal when no playhead is live) so a dense/high-loop playlist can't flood
+        # the GUI thread with cross-thread signals and make the app lag.
+        self._last_progress_ns = 0
+        self._last_step_ns = 0
+        self.player.on_progress = self._emit_progress
+        self.player.on_step = self._emit_step
         self.player.on_breakpoint = lambda i: self.bridge.breakpoint_hit.emit(i)
         # The non-modal editor (when open) and whether the live playhead applies to
         # the run in progress (only true for a plain Play of the current macro).
@@ -930,8 +935,8 @@ class MainWindow(FramelessWindow):
         self.player.backend = self.backend
         self.player.on_loop_complete = self._emit_loop_completed
         self.player.on_error = self._emit_playback_error
-        self.player.on_progress = lambda i, t: self.bridge.progress.emit(i, t)
-        self.player.on_step = lambda i: self.bridge.step_reached.emit(i)
+        self.player.on_progress = self._emit_progress
+        self.player.on_step = self._emit_step
         self.player.on_breakpoint = lambda i: self.bridge.breakpoint_hit.emit(i)
         self._start_hotkeys()
         self.log.info("Switched backend to %s", self.backend.name)
@@ -1008,6 +1013,26 @@ class MainWindow(FramelessWindow):
     def _on_progress(self, index: int, total: int) -> None:
         if total > 0:
             self.progress.setValue(int(index * 100 / total))
+
+    # ~30 Hz cap on player-thread → GUI signals so dense playback can't flood the
+    # event loop; the final event always gets through so the progress bar completes.
+    _SIGNAL_MIN_INTERVAL_NS = 33_000_000
+
+    def _emit_progress(self, index: int, total: int) -> None:
+        now = time.monotonic_ns()
+        if index >= total or (now - self._last_progress_ns) >= self._SIGNAL_MIN_INTERVAL_NS:
+            self._last_progress_ns = now
+            self.bridge.progress.emit(index, total)
+
+    def _emit_step(self, index: int) -> None:
+        # Only drives the editor's live highlight; skip entirely when no playhead is
+        # active (e.g. a playlist run with the editor closed) — that was the flood.
+        if not self._playhead_active:
+            return
+        now = time.monotonic_ns()
+        if (now - self._last_step_ns) >= self._SIGNAL_MIN_INTERVAL_NS:
+            self._last_step_ns = now
+            self.bridge.step_reached.emit(index)
 
     def _on_image_missed(self, event) -> None:
         """Runs on the playback thread when a click-image step can't find its target.

@@ -57,7 +57,15 @@ class PynputBackend(InputBackend):
         try:
             from pynput import keyboard, mouse
         except Exception as exc:  # pragma: no cover - depends on desktop session
-            raise RuntimeError(f"pynput is required for the {self.name} backend") from exc
+            # pynput raises here either because it isn't installed or because its
+            # X backend can't reach a display. Surface the real cause plus a hint
+            # instead of a bare "pynput required" that hid what actually went wrong.
+            raise RuntimeError(
+                f"The {self.name} backend couldn't start pynput ({exc}). "
+                "Install it (pip install pynput), make sure an X server is reachable "
+                "($DISPLAY set), and on a Wayland session launch with "
+                "`--backend wayland` instead."
+            ) from exc
         self.keyboard = keyboard
         self.mouse = mouse
         self._mouse_listener = None
