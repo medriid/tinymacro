@@ -5,6 +5,16 @@ to build next, what to improve, and how to develop/build/release.
 
 ---
 
+## Shipped in v1.8.1
+
+- **Update check no longer hits the GitHub API rate limit** — the "check for
+  updates" flow was calling the unauthenticated `api.github.com` endpoint (60
+  req/hour/IP) and failing with `HTTP 403: rate limit exceeded`. It now resolves
+  the latest tag from the `github.com/<repo>/releases/latest` **web redirect**
+  (not API-rate-limited) and builds the asset download URL from the tag; release
+  notes are a best-effort API call that degrades to empty. Rate-limit errors, if
+  they ever surface, now read as a friendly "try again later".
+
 ## Shipped in v0.1.8
 
 - **Linux fixes** — clearer backend error (surfaces the real pynput/display cause

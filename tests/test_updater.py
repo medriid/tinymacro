@@ -91,6 +91,45 @@ def test_check_raises_on_bad_json():
         )
 
 
+# -- redirect path (no API rate limit) ----------------------------------------
+def test_check_via_redirect_builds_asset_url():
+    info = updater.check_for_update(
+        "0.1.6", asset_name="tiny-macro-linux.zip", resolve_tag=lambda: "v0.1.8",
+    )
+    assert isinstance(info, UpdateInfo)
+    assert info.tag == "v0.1.8" and info.version == "0.1.8"
+    assert info.url == "https://github.com/medriid/tinymacro/releases/download/v0.1.8/tiny-macro-linux.zip"
+    assert info.notes == ""  # notes fetch is skipped on the injected path
+
+
+def test_check_via_redirect_none_when_not_newer():
+    assert updater.check_for_update(
+        "0.1.8", asset_name="tiny-macro-linux.zip", resolve_tag=lambda: "v0.1.8",
+    ) is None
+
+
+def test_check_via_redirect_none_when_no_release():
+    assert updater.check_for_update(
+        "0.1.6", asset_name="tiny-macro-linux.zip", resolve_tag=lambda: None,
+    ) is None
+
+
+def test_latest_tag_parsed_from_redirect_url(monkeypatch):
+    class _Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def geturl(self): return "https://github.com/medriid/tinymacro/releases/tag/v0.1.9"
+    monkeypatch.setattr(updater.urllib.request, "urlopen", lambda *a, **k: _Resp())
+    assert updater.latest_tag_via_redirect() == "v0.1.9"
+
+
+def test_rate_limit_error_is_friendly():
+    def _boom(url):
+        raise Exception("HTTP Error 403: rate limit exceeded")
+    with pytest.raises(UpdaterError, match="rate-limiting"):
+        updater.check_for_update("0.1.6", asset_name="tiny-macro-windows.zip", fetch=_boom)
+
+
 # -- download -----------------------------------------------------------------
 class _FakeResponse:
     def __init__(self, data: bytes):

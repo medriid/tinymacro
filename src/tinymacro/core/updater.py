@@ -104,44 +104,105 @@ def _open(url: str, timeout: float = 15.0):
     return urllib.request.urlopen(request, timeout=timeout)  # noqa: S310 - fixed https host
 
 
+def _asset_url(tag: str, asset_name: str) -> str:
+    """The predictable public download URL for a release asset."""
+    return f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/{asset_name}"
+
+
+def latest_tag_via_redirect() -> str | None:
+    """Resolve the newest release tag from GitHub's *web* redirect.
+
+    ``github.com/<repo>/releases/latest`` 302-redirects to the newest release's
+    ``/releases/tag/<tag>`` page. Reading that redirect target costs nothing
+    against the unauthenticated **api.github.com** limit of 60 requests/hour — the
+    limit that was making update checks fail with HTTP 403. Returns the raw tag
+    (e.g. ``"v0.1.8"``) or None if there's no published release.
+    """
+    request = urllib.request.Request(RELEASES_PAGE, headers={"User-Agent": _USER_AGENT})
+    with urllib.request.urlopen(request, timeout=15.0) as response:  # noqa: S310 - fixed https host
+        final = response.geturl()  # after following the redirect; body left unread
+    if "/tag/" not in final:
+        return None
+    tag = final.rstrip("/").rsplit("/", 1)[-1]
+    return tag or None
+
+
+def _release_notes(tag: str) -> str:
+    """Best-effort release notes via the API; empty string if unavailable.
+
+    This is the only call that touches the rate-limited API, and it's optional —
+    a 403/timeout just means no notes, never a failed update check.
+    """
+    try:
+        with _open(f"https://api.github.com/repos/{GITHUB_REPO}/releases/tags/{tag}") as response:
+            return str(json.loads(response.read()).get("body") or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _friendly_check_error(exc: Exception) -> str:
+    message = str(exc)
+    if "403" in message or "rate limit" in message.lower():
+        return "GitHub is rate-limiting update checks right now — please try again in a little while."
+    return f"Could not check for updates: {message}"
+
+
 def check_for_update(
     current_version: str = __version__,
     *,
     asset_name: str | None = None,
     fetch: Callable[[str], bytes] | None = None,
+    resolve_tag: Callable[[], str | None] | None = None,
 ) -> UpdateInfo | None:
     """Return an :class:`UpdateInfo` if a newer release exists, else None.
 
-    ``fetch`` (url -> raw JSON bytes) and ``asset_name`` are injectable for
-    testing. Raises :class:`UpdaterError` on network/parse failure so callers can
-    show a message; a *successful* check with no newer version returns None.
+    Production resolves the latest tag through :func:`latest_tag_via_redirect` (no
+    API rate limit) and builds the asset URL from it. ``fetch`` (url -> GitHub API
+    JSON bytes) selects the legacy API path, kept for tests; ``resolve_tag`` and
+    ``asset_name`` are injectable too. Raises :class:`UpdaterError` on failure so
+    callers can show a message; a successful check with nothing newer returns None.
     """
     wanted = asset_name or current_asset_name()
     if wanted is None:
         return None
-    try:
-        if fetch is not None:
-            raw = fetch(API_LATEST_URL)
-        else:
-            with _open(API_LATEST_URL) as response:
-                raw = response.read()
-        data = json.loads(raw)
-    except Exception as exc:  # noqa: BLE001 - network, JSON, HTTP all surface here
-        raise UpdaterError(f"Could not check for updates: {exc}") from exc
 
-    tag = str(data.get("tag_name") or "").strip()
+    # Legacy/test path: caller hands us the GitHub API JSON directly.
+    if fetch is not None:
+        try:
+            data = json.loads(fetch(API_LATEST_URL))
+        except Exception as exc:  # noqa: BLE001
+            raise UpdaterError(_friendly_check_error(exc)) from exc
+        tag = str(data.get("tag_name") or "").strip()
+        if not tag or not is_newer(tag, current_version):
+            return None
+        asset = next((a for a in data.get("assets", []) if a.get("name") == wanted), None)
+        if asset is None or not asset.get("browser_download_url"):
+            return None
+        return UpdateInfo(
+            version=".".join(str(p) for p in parse_version(tag)),
+            tag=tag,
+            notes=str(data.get("body") or "").strip(),
+            url=str(asset["browser_download_url"]),
+            asset_name=wanted,
+            size=int(asset.get("size") or 0),
+        )
+
+    # Production path: resolve the tag via the web redirect (not API-rate-limited).
+    try:
+        tag = (resolve_tag or latest_tag_via_redirect)()
+    except Exception as exc:  # noqa: BLE001
+        raise UpdaterError(_friendly_check_error(exc)) from exc
     if not tag or not is_newer(tag, current_version):
-        return None
-    asset = next((a for a in data.get("assets", []) if a.get("name") == wanted), None)
-    if asset is None or not asset.get("browser_download_url"):
         return None
     return UpdateInfo(
         version=".".join(str(p) for p in parse_version(tag)),
         tag=tag,
-        notes=str(data.get("body") or "").strip(),
-        url=str(asset["browser_download_url"]),
+        # Skip the (rate-limited) notes fetch when a tag resolver is injected — the
+        # tests use that path and must not touch the network.
+        notes=_release_notes(tag) if resolve_tag is None else "",
+        url=_asset_url(tag, wanted),
         asset_name=wanted,
-        size=int(asset.get("size") or 0),
+        size=0,  # learned from Content-Length when the download starts
     )
 
 
