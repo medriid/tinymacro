@@ -140,15 +140,23 @@ class PynputBackend(InputBackend):
         self._keyboard_controller.type(text)
 
     def start_hotkeys(self, callback: HotkeyCallback) -> None:
+        # Update the callback first, *before* the early-return: when a variant
+        # switch keeps the backend/listener alive, the new window re-registers and
+        # must take over — otherwise hotkeys keep firing into the old, closed
+        # window. on_press dispatches through this attribute (not a captured local)
+        # so the live callback always wins.
+        self._hotkey_callback = callback
         if self._hotkey_listener:
             return
-        self._hotkey_callback = callback
 
         def on_press(key: object) -> None:
             name = _key_name(key)
             with self._pressed_lock:
                 self._pressed.add(name)
-                callback(frozenset(self._pressed))
+                snapshot = frozenset(self._pressed)
+            cb = self._hotkey_callback
+            if cb is not None:
+                cb(snapshot)
 
         def on_release(key: object) -> None:
             name = _key_name(key)

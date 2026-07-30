@@ -127,7 +127,9 @@ class X11Backend(PynputBackend):
             self._client_message(disp, root, win, "_NET_MOVERESIZE_WINDOW", data)
 
             # Fallback direct configure for WMs that ignore the message above.
-            win.configure(x=int(left), y=int(top), width=int(width), height=int(height))
+            # configure() positions the *frame*, so shift the origin up/left by the
+            # decoration thickness to land the client area on (left, top).
+            win.configure(x=int(left) - fl, y=int(top) - ft, width=int(width), height=int(height))
             disp.sync()
             return True
         except Exception:  # noqa: BLE001

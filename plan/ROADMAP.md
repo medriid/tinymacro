@@ -5,6 +5,18 @@ to build next, what to improve, and how to develop/build/release.
 
 ---
 
+## Shipped in v1.8.4
+
+- **Global hotkeys survive a Classic↔Studio switch** — `_pynput.start_hotkeys`
+  set the callback *after* its early-return, so when the backend/listener is kept
+  alive across a variant switch, hotkeys kept firing into the old, closed window.
+  The callback is now updated before the early-return and dispatched through the
+  live attribute (snapshot under lock, call outside it), matching the evdev path.
+- **X11 docked window no longer sits ~29px too low** — `x11.move_resize_window`
+  computed frame extents but never applied them in the `configure()` fallback, so
+  the client landed offset by the decoration thickness. It now subtracts the
+  extents from the origin so the client area lands where intended.
+
 ## Shipped in v1.8.3
 
 - **Self-contained Linux zip — no more "Could not load the Qt platform plugin
