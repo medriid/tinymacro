@@ -304,21 +304,40 @@ def apply_update_and_relaunch(new_app_dir: Path, target_dir: Path | None = None,
 
 def _write_windows_helper(pid: int, new_dir: Path, target: Path, exe: Path) -> Path:
     script = Path(tempfile.gettempdir()) / f"tinymacro_update_{pid}.cmd"
+    log = Path(tempfile.gettempdir()) / f"tinymacro_update_{pid}.log"
     stage_root = _stage_root_for(new_dir)
-    # Wait for our PID to disappear, mirror the new build over the old folder,
-    # relaunch, then delete the staged copy and this script.
+    macros = target / "macros"
+    # Wait (bounded) for our PID to exit so the exe/DLLs unlock, mirror the new
+    # build over the old folder, relaunch, and clean up. Everything is logged so a
+    # failed swap is diagnosable. Critical fixes over the naive version:
+    #   * /R:2 /W:2 — robocopy defaults to /R:1000000 /W:30, so a single locked or
+    #     unwritable file would make it retry for ~347 days (looks like a hang).
+    #   * bounded wait — never spin forever if PID detection misbehaves.
+    #   * /XD the macros folder so a user's saved macros survive the mirror.
     body = f"""@echo off
-setlocal
+setlocal enableextensions enabledelayedexpansion
+set "LOG={log}"
+> "%LOG%" echo [update] start pid={pid}
+>> "%LOG%" echo [update] new_dir={new_dir}
+>> "%LOG%" echo [update] target={target}
+>> "%LOG%" echo [update] exe={exe}
+set /a n=0
 :waitloop
-tasklist /FI "PID eq {pid}" 2>NUL | find "{pid}" >NUL
-if not errorlevel 1 (
-    ping -n 2 127.0.0.1 >NUL
-    goto waitloop
-)
-robocopy "{new_dir}" "{target}" /MIR /NFL /NDL /NJH /NJS /NP >NUL
+tasklist /FI "PID eq {pid}" /NH 2>NUL | find "{pid}" >NUL
+if errorlevel 1 goto copy
+set /a n+=1
+if !n! GEQ 120 ( >> "%LOG%" echo [update] gave up waiting for pid & goto copy )
+ping -n 2 127.0.0.1 >NUL
+goto waitloop
+:copy
+>> "%LOG%" echo [update] process gone after !n! checks; copying
+ping -n 3 127.0.0.1 >NUL
+robocopy "{new_dir}" "{target}" /MIR /R:2 /W:2 /XD "{macros}" /NFL /NDL /NJH /NP >> "%LOG%" 2>&1
+>> "%LOG%" echo [update] robocopy exit=!errorlevel!
 start "" "{exe}"
+>> "%LOG%" echo [update] relaunched; done
 rmdir /S /Q "{stage_root}" >NUL 2>&1
-del "%~f0" >NUL 2>&1
+(goto) 2>NUL & del "%~f0"
 """
     script.write_text(body, encoding="utf-8")
     return script

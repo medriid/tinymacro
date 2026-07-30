@@ -5,6 +5,17 @@ to build next, what to improve, and how to develop/build/release.
 
 ---
 
+## Shipped in v1.8.5
+
+- **Auto-update now actually replaces the files (Windows)** — the swap helper ran
+  `robocopy /MIR` with its default `/R:1000000 /W:30`, so if the just-exited exe
+  was still briefly locked, robocopy retried it for ~347 days — the update looked
+  like it "downloaded but never applied" (the reported 10-minute hang). The helper
+  now uses `/R:2 /W:2`, waits a moment for file locks to release, **excludes the
+  user's `macros/` folder** from the mirror so saved macros survive, writes a
+  diagnostic log to `%TEMP%\tinymacro_update_<pid>.log`, and self-deletes cleanly.
+  Verified end-to-end on Windows (old→new swap succeeds, macros preserved).
+
 ## Shipped in v1.8.4
 
 - **Global hotkeys survive a Classic↔Studio switch** — `_pynput.start_hotkeys`

@@ -130,6 +130,32 @@ def test_rate_limit_error_is_friendly():
         updater.check_for_update("0.1.6", asset_name="tiny-macro-windows.zip", fetch=_boom)
 
 
+# -- swap-and-relaunch helper -------------------------------------------------
+def test_windows_helper_caps_robocopy_retries_and_keeps_macros(tmp_path):
+    """The Windows helper must not use robocopy's default /R:1000000 (which retries
+    a locked exe for ~347 days and looks like a hang), and must preserve macros/."""
+    new_dir = tmp_path / "stage" / "extracted" / "tiny-macro-windows"
+    new_dir.mkdir(parents=True)
+    target = tmp_path / "app"
+    exe = target / "tiny-macro-windows.exe"
+    script = updater._write_windows_helper(4242, new_dir, target, exe)
+    body = script.read_text()
+    assert "/R:2" in body and "/W:2" in body        # bounded retries, not the default
+    assert "/R:1000000" not in body
+    assert "/XD" in body and "macros" in body        # user macros survive the mirror
+    assert "robocopy" in body and str(target) in body
+
+
+def test_posix_helper_waits_and_relaunches(tmp_path):
+    new_dir = tmp_path / "stage" / "extracted" / "tiny-macro-linux"
+    new_dir.mkdir(parents=True)
+    target = tmp_path / "app"
+    exe = target / "tiny-macro-linux"
+    body = updater._write_posix_helper(4242, new_dir, target, exe).read_text()
+    assert "kill -0 4242" in body      # waits for the app to exit
+    assert str(exe) in body            # relaunches
+
+
 # -- download -----------------------------------------------------------------
 class _FakeResponse:
     def __init__(self, data: bytes):
